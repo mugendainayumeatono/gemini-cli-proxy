@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore
+.cursor
+img
+tests
+README.md
+README_zh.md
+LICENSE
+.python-version

@@ -1,0 +1,29 @@
+services:
+  gemini-proxy:
+    build: .
+    container_name: gemini-cli-proxy
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./src:/app/src
+      - ./pyproject.toml:/app/pyproject.toml
+      - ./uv.lock:/app/uv.lock
+      - ./README.md:/app/README.md
+      # 持久化配置
+      - gemini-config:/root/.gemini
+      # 持久化日志到本地 logs 目录
+      - ./logs:/app/logs
+      # 挂载本地入口脚本，使修改直接生效，无需重新构建镜像
+      - ./entrypoint.sh:/entrypoint.sh
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    ports:
+      - "127.0.0.1:8765:8765"
+    restart: unless-stopped
+
+volumes:
+  gemini-config:
+
+networks:
+  default:
+    name: gemini-proxy-network
