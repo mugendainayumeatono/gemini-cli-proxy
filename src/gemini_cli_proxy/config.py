@@ -5,6 +5,8 @@ Manages application configuration
 """
 
 
+from typing import Optional
+
 class Config:
     """Application configuration class"""
     
@@ -27,7 +29,7 @@ class Config:
         self.max_concurrency: int = 4  # Maximum concurrent subprocesses
         
         # API Key for fetching models
-        self.api_key: str | None = os.environ.get('GEMINI_API_KEY')
+        self.api_key: Optional[str] = os.environ.get('GEMINI_API_KEY')
         
         # Supported models list
         self.supported_models: list = [
