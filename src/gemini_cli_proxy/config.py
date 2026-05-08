@@ -26,6 +26,9 @@ class Config:
         self.rate_limit: int = 60  # Requests per minute
         self.max_concurrency: int = 4  # Maximum concurrent subprocesses
         
+        # API Key for fetching models
+        self.api_key: str | None = os.environ.get('GEMINI_API_KEY')
+        
         # Supported models list
         self.supported_models: list = [
             "gemini-2.5-pro",

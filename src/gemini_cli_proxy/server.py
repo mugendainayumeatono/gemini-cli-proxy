@@ -7,6 +7,9 @@ Implements HTTP service and API endpoints
 import asyncio
 import logging
 import traceback
+import json
+import urllib.request
+import urllib.error
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -49,6 +52,43 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting Gemini CLI Proxy v{__version__}")
     logger.info(f"Configuration: port={config.port}, rate_limit={config.rate_limit}/min, concurrency={config.max_concurrency}")
     logger.debug(f"Debug logging is enabled (log_level={config.log_level})")
+    
+    # Fetch models from Gemini API if API key is provided
+    if config.api_key:
+        try:
+            logger.info("Attempting to fetch supported models from Gemini API...")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={config.api_key}"
+            req = urllib.request.Request(url, headers={'Content-Type': 'application/json'})
+            
+            # Run blocking HTTP request in a separate thread
+            def fetch_models():
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    return json.loads(response.read().decode())
+            
+            data = await asyncio.to_thread(fetch_models)
+            
+            fetched_models = []
+            for model in data.get("models", []):
+                name = model.get("name", "")
+                if name.startswith("models/"):
+                    name = name[7:]
+                fetched_models.append(name)
+            
+            if fetched_models:
+                config.supported_models = fetched_models
+                logger.info(f"Successfully updated supported models from Gemini API: {len(fetched_models)} models loaded")
+            else:
+                logger.warning("Gemini API returned an empty model list, falling back to hardcoded models")
+                
+        except urllib.error.HTTPError as e:
+            logger.error(f"Failed to fetch models from Gemini API (HTTP {e.code}), using hardcoded models. Reason: {e.reason}")
+        except urllib.error.URLError as e:
+            logger.error(f"Failed to fetch models from Gemini API (network error), using hardcoded models. Reason: {e.reason}")
+        except Exception as e:
+            logger.error(f"Failed to fetch or parse models from Gemini API, using hardcoded models. Reason: {e}")
+    else:
+        logger.info("GEMINI_API_KEY not set, using hardcoded supported models")
+        
     yield
     logger.info("Shutting down Gemini CLI Proxy")
 

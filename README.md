@@ -106,6 +106,12 @@ Add Model Provider in Cherry Studio settings:
 
 ## ⚙️ Configuration Options
 
+### Environment Variables
+
+- `GEMINI_API_KEY`: Optional. If set, the proxy will dynamically fetch the list of supported models from the Google Gemini Web API during startup, making them available via the `/v1/models` endpoint. If not set, it defaults to a hardcoded list (`gemini-2.5-pro`, `gemini-2.5-flash`). You can get an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+### Command Line Arguments
+
 View command line parameters:
 
 ```bash

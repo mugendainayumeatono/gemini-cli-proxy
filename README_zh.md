@@ -106,6 +106,12 @@ print(response.choices[0].message.content)
 
 ## ⚙️ 配置选项
 
+### 环境变量
+
+- `GEMINI_API_KEY`: 可选。如果设置了此环境变量，代理服务在启动时会通过 Google Gemini Web API 动态获取支持的模型列表，供客户端通过 `/v1/models` 接口查询。如果没有设置，则默认使用内部硬编码的列表 (`gemini-2.5-pro`, `gemini-2.5-flash`)。你可以在 [Google AI Studio](https://aistudio.google.com/app/apikey) 免费获取 API Key。
+
+### 命令行参数
+
 查看命令行参数：
 
 ```bash
