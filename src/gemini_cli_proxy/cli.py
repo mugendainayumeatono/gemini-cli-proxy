@@ -39,6 +39,11 @@ import uvicorn
     help="Gemini CLI command timeout in seconds"
 )
 @click.option(
+    "--api-key",
+    envvar="PROXY_API_KEY",
+    help="API key required for client requests. If not set, any non-empty key in Authorization header is accepted."
+)
+@click.option(
     "--debug",
     is_flag=True,
     help="Enable debug mode"
@@ -49,6 +54,7 @@ def main(
     rate_limit: int,
     max_concurrency: int,
     timeout: float,
+    api_key: str,
     debug: bool
 ):
     """Start Gemini CLI Proxy server"""
@@ -59,6 +65,8 @@ def main(
     
     # Set environment variable for reload mode
     os.environ['GEMINI_CLI_PROXY_DEBUG'] = str(debug)
+    if api_key:
+        os.environ['PROXY_API_KEY'] = api_key
     
     config.host = host
     config.port = port
@@ -67,6 +75,7 @@ def main(
     config.max_concurrency = max_concurrency
     config.timeout = timeout
     config.debug = debug
+    config.proxy_api_key = api_key
     
     # Update logging level based on configuration
     import logging

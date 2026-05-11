@@ -28,6 +28,9 @@ class Config:
         self.rate_limit: int = 60  # Requests per minute
         self.max_concurrency: int = 4  # Maximum concurrent subprocesses
         
+        # Proxy API Key for client authentication
+        self.proxy_api_key: Optional[str] = os.environ.get('PROXY_API_KEY')
+        
         # API Key for fetching models
         self.api_key: Optional[str] = os.environ.get('GEMINI_API_KEY')
         

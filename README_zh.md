@@ -97,7 +97,7 @@ print(response.choices[0].message.content)
 在 Cherry Studio 设置中添加 Model Provider：
 - Provider Type 选择: OpenAI
 - API Host 填写: `http://localhost:8765`
-- API Key 填写: 可填任意字符串
+- API Key 填写: 需与服务端配置的 API Key 保持一致（若服务端未配置，则可填任意非空字符串）
 - Model Name 填写: `gemini-2.5-pro` 或 `gemini-2.5-flash`
 
 ![Cherry Studio Config 1](./img/cherry-studio-1.jpg)
@@ -121,6 +121,7 @@ gemini-cli-proxy --help
 可用选项：
 - `--host`: 服务器主机地址 (默认: 127.0.0.1)
 - `--port`: 服务器端口 (默认: 8765)
+- `--api-key`: 客户端请求所需的 API Key (也可通过 `PROXY_API_KEY` 环境变量设置)
 - `--rate-limit`: 每分钟最大请求数 (默认: 60)
 - `--max-concurrency`: 最大并发子进程数 (默认: 4)
 - `--timeout`: Gemini CLI 命令超时时间，单位秒 (默认: 30.0)
@@ -142,6 +143,13 @@ export all_proxy=socks5://127.0.0.1:7890
 uvx gemini-cli-proxy
 ```
 
+## 📄 许可证
+
+MIT License
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
 ## 📄 许可证
 
 MIT License

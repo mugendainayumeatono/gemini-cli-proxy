@@ -12,7 +12,8 @@ import urllib.request
 import urllib.error
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -115,6 +116,61 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+# Security
+security = HTTPBearer(auto_error=False)
+
+async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify API key from Authorization header"""
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    message="API key is missing",
+                    type="invalid_request_error",
+                    code="missing_api_key"
+                )
+            ).model_dump()
+        )
+    
+    token = credentials.credentials
+    if config.proxy_api_key:
+        if token != config.proxy_api_key:
+            raise HTTPException(
+                status_code=401,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        message="Invalid API key",
+                        type="invalid_request_error",
+                        code="invalid_api_key"
+                    )
+                ).model_dump()
+            )
+    return token
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTPException to return OpenAI-compatible error format"""
+    # If detail is already an ErrorResponse dict, return it directly
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=exc.detail
+        )
+    # Otherwise wrap it in an OpenAI-compatible format
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            error=ErrorDetail(
+                message=str(exc.detail),
+                type="invalid_request_error",
+                code=str(exc.status_code)
+            )
+        ).model_dump()
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
@@ -142,7 +198,7 @@ async def health_check():
 
 
 @app.get("/v1/models", response_model=ModelsResponse)
-async def list_models():
+async def list_models(api_key: str = Depends(verify_api_key)):
     """List available models"""
     models = [
         ModelInfo(id=model_id) for model_id in config.supported_models
@@ -155,7 +211,8 @@ async def list_models():
 @limiter.limit(f"{config.rate_limit}/minute")
 async def chat_completions(
     chat_request: ChatCompletionRequest,
-    request: Request
+    request: Request,
+    api_key: str = Depends(verify_api_key)
 ):
     """
     Chat completion endpoint

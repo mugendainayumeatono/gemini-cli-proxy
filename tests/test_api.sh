@@ -23,7 +23,7 @@ echo -e "\n"
 echo "========================================="
 echo "2. 获取可用模型列表 (GET /v1/models)"
 echo "========================================="
-curl -s -X GET "$BASE_URL/v1/models" | eval $JSON_FORMATTER
+curl -s -X GET "$BASE_URL/v1/models" -H "Authorization: Bearer sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7" | eval $JSON_FORMATTER
 echo -e "\n"
 
 echo "========================================="
@@ -32,7 +32,7 @@ echo "========================================="
 # 注意：代码里没有强制要求 Authorization 请求头，但兼容 OpenAI 规范的客户端通常会发送
 curl -s -X POST "$BASE_URL/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy_key" \
+  -H "Authorization: Bearer sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7" \
   -d '{
     "model": "gemini-2.5-flash",
     "messages": [
@@ -50,7 +50,7 @@ echo "========================================="
 # 流式请求（Server-Sent Events），使用 -N 参数保持连接并实时打印
 curl -N -s -X POST "$BASE_URL/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy_key" \
+  -H "Authorization: Bearer sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7" \
   -d '{
     "model": "gemini-2.5-flash",
     "messages": [

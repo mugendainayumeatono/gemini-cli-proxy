@@ -63,7 +63,7 @@ After startup, test the service with curl:
 ```bash
 curl http://localhost:8765/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy-key" \
+  -H "Authorization: Bearer your-api-key" \
   -d '{
     "model": "gemini-2.5-pro",
     "messages": [{"role": "user", "content": "Hello!"}]
@@ -79,7 +79,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url='http://localhost:8765/v1',
-    api_key='dummy-key'  # Any string works
+    api_key='your-api-key'  # Must match the server configuration
 )
 
 response = client.chat.completions.create(
@@ -121,6 +121,7 @@ gemini-cli-proxy --help
 Available options:
 - `--host`: Server host address (default: 127.0.0.1)
 - `--port`: Server port (default: 8765)
+- `--api-key`: API key required for client requests. (Can also be set via `PROXY_API_KEY` env var)
 - `--rate-limit`: Max requests per minute (default: 60)
 - `--max-concurrency`: Max concurrent subprocesses (default: 4)
 - `--timeout`: Gemini CLI command timeout in seconds (default: 30.0)
@@ -140,6 +141,16 @@ export all_proxy=socks5://127.0.0.1:7890
 
 # Then start the service
 uvx gemini-cli-proxy
+```
+
+## 📄 License
+
+MIT License
+
+## 🤝 Contributing
+
+Issues and Pull Requests are welcome! 
+oxy
 ```
 
 ## 📄 License
