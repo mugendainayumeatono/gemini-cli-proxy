@@ -109,6 +109,9 @@ print(response.choices[0].message.content)
 ### 环境变量
 
 - `GEMINI_API_KEY`: 可选。如果设置了此环境变量，代理服务在启动时会通过 Google Gemini Web API 动态获取支持的模型列表，供客户端通过 `/v1/models` 接口查询。如果没有设置，则默认使用内部硬编码的列表 (`gemini-2.5-pro`, `gemini-2.5-flash`)。你可以在 [Google AI Studio](https://aistudio.google.com/app/apikey) 免费获取 API Key。
+- `USE_NO_TOOLS_POLICY`: 设置为 `true` 以禁用 Gemini CLI 的工具使用（Agent 能力）。推荐在稳定的代理场景下使用。(默认: `false`)
+- `GEMINI_POLICY_PATH`: Policy JSON 文件的路径。(默认容器内路径: `/app/policies/no-tools.json`)
+- `PROXY_API_KEY`: 用于客户端认证的 API Key。
 
 ### 命令行参数
 

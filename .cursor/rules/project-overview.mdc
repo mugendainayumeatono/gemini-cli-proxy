@@ -19,6 +19,7 @@ The main entry point is [src/gemini_cli_proxy/cli.py](mdc:src/gemini_cli_proxy/c
 - **OpenAI Adapter**: [src/gemini_cli_proxy/openai_adapter.py](mdc:src/gemini_cli_proxy/openai_adapter.py) - Format conversion between OpenAI and Gemini
 - **Data Models**: [src/gemini_cli_proxy/models.py](mdc:src/gemini_cli_proxy/models.py) - Pydantic models for request/response validation
 - **Configuration**: [src/gemini_cli_proxy/config.py](mdc:src/gemini_cli_proxy/config.py) - Application configuration management
+- **Policies**: `policies/` - Gemini CLI tool execution policies (e.g., `no-tools.json`)
 
 ### Key Files
 

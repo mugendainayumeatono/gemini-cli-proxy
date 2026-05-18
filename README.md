@@ -109,6 +109,9 @@ Add Model Provider in Cherry Studio settings:
 ### Environment Variables
 
 - `GEMINI_API_KEY`: Optional. If set, the proxy will dynamically fetch the list of supported models from the Google Gemini Web API during startup, making them available via the `/v1/models` endpoint. If not set, it defaults to a hardcoded list (`gemini-2.5-pro`, `gemini-2.5-flash`). You can get an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+- `USE_NO_TOOLS_POLICY`: Set to `true` to disable tool usage (Agent capabilities) of the Gemini CLI. Recommended for stable proxy usage. (Default: `false`)
+- `GEMINI_POLICY_PATH`: Path to the policy JSON file. (Default: `/app/policies/no-tools.json` in container)
+- `PROXY_API_KEY`: API key for client authentication.
 
 ### Command Line Arguments
 
