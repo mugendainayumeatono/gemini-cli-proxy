@@ -24,6 +24,10 @@ class Config:
         self.gemini_command: str = "gemini"  # Gemini CLI command path
         self.timeout: float = 120.0
         
+        # Policy configuration
+        self.use_no_tools_policy: bool = os.environ.get('USE_NO_TOOLS_POLICY', 'false').lower() == 'true'
+        self.policy_path: str = os.environ.get('GEMINI_POLICY_PATH', '/app/policies/no-tools.json')
+        
         # Limit configuration
         self.rate_limit: int = 60  # Requests per minute
         self.max_concurrency: int = 4  # Maximum concurrent subprocesses

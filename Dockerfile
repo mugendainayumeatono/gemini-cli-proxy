@@ -15,6 +15,7 @@ WORKDIR /app
 
 # 复制并安装依赖
 COPY pyproject.toml uv.lock ./
+COPY policies /app/policies
 RUN uv sync --no-install-project
 
 # 启动脚本

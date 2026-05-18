@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+WORKSPACE_DIR="/app/workspace"
+mkdir -p "$WORKSPACE_DIR"
+cd "$WORKSPACE_DIR"
+
 CONFIG_DIR="/root/.gemini"
 SUCCESS_MARKER="$CONFIG_DIR/.init_done"
 LOG_DIR="/app/logs"
@@ -10,8 +14,12 @@ mkdir -p "$LOG_DIR"
 mkdir -p "$CONFIG_DIR"
 
 check_gemini() {
-    echo "正在验证 Gemini 连通性 (gemini -p 'helloworld')..."
-    if gemini -p "helloworld" > /dev/null 2>&1; then
+    echo "正在验证 Gemini 连通性 (使用 policies/no-tools.json 限制工具)..."
+    
+    # 使用项目内预设的 Policy 文件限制所有工具调用 (方案1)
+    # 结合明确的 Prompt 指令 (方案2)
+    # -p 模式下无法交互审批，具有方案3的约束效果
+    if gemini --policy "/app/policies/no-tools.json" -p "Reply with 'pong' and nothing else. DO NOT use tools." >"$LOG_FILE" 2>&1; then
         return 0
     else
         return 1

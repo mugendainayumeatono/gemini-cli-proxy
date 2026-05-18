@@ -7,6 +7,7 @@ Handles format conversion and compatibility
 import time
 import uuid
 import logging
+import json
 from typing import AsyncGenerator
 from fastapi.responses import StreamingResponse
 
@@ -86,6 +87,21 @@ class OpenAIAdapter:
             completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
             created_time = int(time.time())
             
+            # Send initial role chunk for better compatibility
+            initial_response = ChatCompletionStreamResponse(
+                id=completion_id,
+                created=created_time,
+                model=request.model,
+                choices=[
+                    ChatCompletionStreamChoice(
+                        index=0,
+                        delta={"role": "assistant", "content": ""},
+                        finish_reason=None
+                    )
+                ]
+            )
+            yield f"data: {initial_response.model_dump_json()}\n\n"
+            
             try:
                 # Get streaming data generator
                 stream_generator = gemini_client.chat_completion_stream(
@@ -97,6 +113,9 @@ class OpenAIAdapter:
                 
                 # Send data chunks one by one
                 async for chunk in stream_generator:
+                    if not chunk:
+                        continue
+                        
                     stream_response = ChatCompletionStreamResponse(
                         id=completion_id,
                         created=created_time,
@@ -133,19 +152,20 @@ class OpenAIAdapter:
                 
             except Exception as e:
                 logger.error(f"Error processing streaming chat completion request: {e}")
-                # Send error information
+                # Send error information in OpenAI format
                 error_response = {
                     "error": {
                         "message": str(e),
-                        "type": "internal_error"
+                        "type": "internal_error",
+                        "code": "500"
                     }
                 }
-                yield f"data: {error_response}\n\n"
+                yield f"data: {json.dumps(error_response)}\n\n"
                 yield "data: [DONE]\n\n"
         
         return StreamingResponse(
             generate_stream(),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",

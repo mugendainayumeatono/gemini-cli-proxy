@@ -94,7 +94,7 @@ class GeminiClient:
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
-        Execute streaming chat completion request (fake streaming implementation)
+        Execute streaming chat completion request
         
         Args:
             messages: List of chat messages
@@ -104,21 +104,120 @@ class GeminiClient:
             **kwargs: Other parameters
             
         Yields:
-            Response text chunks split by lines
+            Response text chunks
         """
-        # First get complete response
-        full_response = await self.chat_completion(
-            messages, model, temperature, max_tokens, **kwargs
-        )
-        
-        # Split by lines and yield one by one
-        lines = full_response.split('\n')
-        for line in lines:
-            if line.strip():  # Skip empty lines
-                yield line.strip()
-                # Add small delay to simulate streaming effect
-                await asyncio.sleep(0.05)
+        async with self.semaphore:
+            async for chunk in self._execute_gemini_command_stream(
+                messages, model, temperature, max_tokens, **kwargs
+            ):
+                yield chunk
     
+    async def _execute_gemini_command_stream(
+        self,
+        messages: List[ChatMessage],
+        model: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """
+        Execute Gemini CLI command and yield output as it arrives
+        
+        Args:
+            messages: List of chat messages
+            model: Model name to use
+            temperature: Temperature parameter
+            max_tokens: Maximum number of tokens
+            **kwargs: Other parameters
+            
+        Yields:
+            Command output chunks
+        """
+        # Build command arguments and get temporary files
+        prompt, temp_files = self._build_prompt_with_images(messages)
+        
+        cmd_args = [config.gemini_command]
+        if config.use_no_tools_policy:
+            cmd_args.extend(["--policy", config.policy_path])
+        cmd_args.extend(["-m", model])
+        cmd_args.extend(["-p", prompt])
+        
+        # Note: Real gemini CLI doesn't support temperature and max_tokens parameters
+        if temperature is not None:
+            logger.debug(f"Ignoring temperature parameter: {temperature} (gemini CLI doesn't support)")
+        if max_tokens is not None:
+            logger.debug(f"Ignoring max_tokens parameter: {max_tokens} (gemini CLI doesn't support)")
+        
+        logger.debug(f"Executing command: {' '.join(cmd_args)}")
+        
+        process = None
+        try:
+            # Use asyncio to execute subprocess
+            # Use current working directory (set in entrypoint.sh)
+            process = await asyncio.create_subprocess_exec(
+                *cmd_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.getcwd()
+            )
+            
+            # Read from stdout incrementally
+            while True:
+                try:
+                    # Read up to 1024 bytes
+                    chunk = await asyncio.wait_for(
+                        process.stdout.read(1024),
+                        timeout=config.timeout
+                    )
+                    if not chunk:
+                        break
+                    yield chunk.decode('utf-8')
+                except asyncio.TimeoutError:
+                    logger.error(f"Gemini CLI command timeout ({config.timeout}s) during streaming")
+                    if process:
+                        process.terminate()
+                    raise RuntimeError(f"Gemini CLI execution timeout ({config.timeout} seconds)")
+            
+            # Wait for command execution to complete
+            await process.wait()
+            
+            # Check return code
+            if process.returncode != 0:
+                stderr = await process.stderr.read()
+                error_msg = stderr.decode('utf-8').strip()
+                
+                # Try to simplify error message
+                simplified_msg = self._simplify_error_message(error_msg)
+                if simplified_msg:
+                    logger.warning(f"Gemini CLI error (simplified): {simplified_msg}")
+                    raise RuntimeError(simplified_msg)
+                else:
+                    logger.warning(f"Gemini CLI execution failed: {error_msg}")
+                    raise RuntimeError(f"Gemini CLI execution failed (exit code: {process.returncode}): {error_msg}")
+            
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"Error executing Gemini CLI command: {e}")
+            raise RuntimeError(f"Error executing Gemini CLI command: {str(e)}") from e
+        finally:
+            # Clean up process if still running
+            if process and process.returncode is None:
+                try:
+                    process.terminate()
+                    await process.wait()
+                except Exception:
+                    pass
+                    
+            # Clean up temporary files (skip in debug mode)
+            if not config.debug:
+                for temp_file in temp_files:
+                    try:
+                        if os.path.exists(temp_file):
+                            os.unlink(temp_file)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up temp file {temp_file}: {e}")
+
     async def _execute_gemini_command(
         self,
         messages: List[ChatMessage],
@@ -144,6 +243,8 @@ class GeminiClient:
         prompt, temp_files = self._build_prompt_with_images(messages)
         
         cmd_args = [config.gemini_command]
+        if config.use_no_tools_policy:
+            cmd_args.extend(["--policy", config.policy_path])
         cmd_args.extend(["-m", model])
         cmd_args.extend(["-p", prompt])
         
@@ -158,10 +259,12 @@ class GeminiClient:
         
         try:
             # Use asyncio to execute subprocess
+            # Use current working directory (set in entrypoint.sh)
             process = await asyncio.create_subprocess_exec(
                 *cmd_args,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.getcwd()
             )
             
             # Wait for command execution to complete with timeout

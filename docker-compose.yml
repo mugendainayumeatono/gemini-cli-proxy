@@ -6,6 +6,7 @@ services:
     tty: true
     volumes:
       - ./src:/app/src
+      - ./policies:/app/policies
       - ./pyproject.toml:/app/pyproject.toml
       - ./uv.lock:/app/uv.lock
       - ./README.md:/app/README.md
@@ -18,6 +19,7 @@ services:
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - PROXY_API_KEY=${PROXY_API_KEY:-sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7}
+      - USE_NO_TOOLS_POLICY=true
     ports:
       - "127.0.0.1:8765:8765"
     restart: unless-stopped

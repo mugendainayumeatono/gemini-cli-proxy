@@ -34,7 +34,7 @@ import uvicorn
 )
 @click.option(
     "--timeout",
-    default=30.0,
+    default=120.0,
     type=float,
     help="Gemini CLI command timeout in seconds"
 )
