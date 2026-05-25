@@ -1,11 +1,17 @@
-# 使用超小规模的 Alpine 镜像
-FROM python:3.11-alpine
+# 使用 Debian-slim 镜像以支持 agy 的 glibc 依赖
+FROM python:3.11-slim
 
 # 安装运行时必需的最小依赖
-RUN apk add --no-cache nodejs npm bash curl git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    curl \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# 全局安装 gemini-cli 并清理缓存
-RUN npm install -g @google/gemini-cli && npm cache clean --force
+# 安装 agy CLI 并创建全局软链接
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+    && ln -s /root/.local/bin/agy /usr/local/bin/agy
 
 # 获取 uv 工具
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

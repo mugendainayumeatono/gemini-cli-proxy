@@ -21,7 +21,7 @@ class Config:
         self.log_level: str = "debug" if self.debug else "info"
         
         # Gemini CLI configuration
-        self.gemini_command: str = "gemini"  # Gemini CLI command path
+        self.gemini_command: str = "agy"  # Gemini CLI command path
         self.timeout: float = 120.0
         
         # Policy configuration
