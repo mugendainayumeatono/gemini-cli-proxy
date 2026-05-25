@@ -137,9 +137,8 @@ class GeminiClient:
         prompt, temp_files = self._build_prompt_with_images(messages)
         
         cmd_args = [config.gemini_command]
-        if config.use_no_tools_policy:
-            cmd_args.extend(["--policy", config.policy_path])
-        cmd_args.extend(["-m", model])
+
+
         cmd_args.extend(["-p", prompt])
         
         # Note: Real gemini CLI doesn't support temperature and max_tokens parameters
@@ -243,9 +242,8 @@ class GeminiClient:
         prompt, temp_files = self._build_prompt_with_images(messages)
         
         cmd_args = [config.gemini_command]
-        if config.use_no_tools_policy:
-            cmd_args.extend(["--policy", config.policy_path])
-        cmd_args.extend(["-m", model])
+
+
         cmd_args.extend(["-p", prompt])
         
         # Note: Real gemini CLI doesn't support temperature and max_tokens parameters

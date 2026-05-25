@@ -222,19 +222,6 @@ async def chat_completions(
     logger.info(f"Received chat completion request: model={chat_request.model}, stream={chat_request.stream}")
     
     try:
-        # Validate model
-        if chat_request.model not in config.supported_models:
-            raise HTTPException(
-                status_code=400,
-                detail=ErrorResponse(
-                    error=ErrorDetail(
-                        message=f"Unsupported model: {chat_request.model}. Supported models: {', '.join(config.supported_models)}",
-                        type="invalid_request_error",
-                        param="model"
-                    )
-                ).model_dump()
-            )
-        
         # Handle streaming request
         if chat_request.stream:
             return await openai_adapter.chat_completion_stream(chat_request)
