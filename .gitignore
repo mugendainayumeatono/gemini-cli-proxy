@@ -198,3 +198,4 @@ cython_debug/
 
 # Temporary image files for Gemini CLI
 .gemini-cli-proxy/
+.gemini/
