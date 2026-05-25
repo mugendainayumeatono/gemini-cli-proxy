@@ -29,20 +29,38 @@ export http_proxy=http://127.0.0.1:7890
 export all_proxy=socks5://127.0.0.1:7890
 ```
 
-### 安装 Gemini CLI
+### 安装 Antigravity CLI (agy)
 
-安装 Gemini CLI
-```bash
-npm install -g @google/gemini-cli
-```
+当前项目底层引擎已迁移至 `antigravity-cli` (`agy`)。请确保你的环境中已安装 `agy`。
 
-安装后，使用 `gemini` 命令运行 Gemini CLI。你需要首先启动一次，进行登录等初始化配置。
+你需要首先手动执行一次以完成 OAuth 授权等初始化配置。
 
 配置完成后，请确认你可以成功运行以下命令：
 
 ```bash
-gemini -p "Hello, Gemini"
+agy -p "Hello, Gemini"
 ```
+
+## 🐳 Docker 部署
+
+本项目提供了一套完善的 Docker 部署与交互式鉴权流程：
+
+1. **构建镜像**：
+   ```bash
+   ./build.sh
+   ```
+2. **启动服务**：
+   ```bash
+   docker compose up -d
+   ```
+3. **交互式鉴权**：
+   由于 `agy` 首次运行需要交互式登录，如果检测到尚未授权，容器会保持等待运行状态。请使用提供的脚本进入容器完成配置：
+   ```bash
+   ./enter.sh
+   # 进入容器内部的 bash 后，执行：
+   agy
+   ```
+   配置完成后，重启容器即可（`docker compose restart`）。
 
 ### 启动 Gemini CLI Proxy
 
@@ -109,9 +127,9 @@ print(response.choices[0].message.content)
 ### 环境变量
 
 - `GEMINI_API_KEY`: 可选。如果设置了此环境变量，代理服务在启动时会通过 Google Gemini Web API 动态获取支持的模型列表，供客户端通过 `/v1/models` 接口查询。如果没有设置，则默认使用内部硬编码的列表 (`gemini-2.5-pro`, `gemini-2.5-flash`)。你可以在 [Google AI Studio](https://aistudio.google.com/app/apikey) 免费获取 API Key。
-- `USE_NO_TOOLS_POLICY`: 设置为 `true` 以禁用 Gemini CLI 的工具使用（Agent 能力）。推荐在稳定的代理场景下使用。(默认: `false`)
-- `GEMINI_POLICY_PATH`: Policy JSON 文件的路径。(默认容器内路径: `/app/policies/no-tools.json`)
 - `PROXY_API_KEY`: 用于客户端认证的 API Key。
+
+*注：新版本代理已移除了对模型的硬性限制以及相关的 policy 强限制参数，提供更灵活透明的代理体验。*
 
 ### 命令行参数
 
@@ -127,7 +145,7 @@ gemini-cli-proxy --help
 - `--api-key`: 客户端请求所需的 API Key (也可通过 `PROXY_API_KEY` 环境变量设置)
 - `--rate-limit`: 每分钟最大请求数 (默认: 60)
 - `--max-concurrency`: 最大并发子进程数 (默认: 4)
-- `--timeout`: Gemini CLI 命令超时时间，单位秒 (默认: 30.0)
+- `--timeout`: CLI 命令超时时间，单位秒 (默认: 30.0)
 - `--debug`: 启用调试模式 (启用调试日志和文件监控)
 
 ## ❓ 常见问题
@@ -146,13 +164,6 @@ export all_proxy=socks5://127.0.0.1:7890
 uvx gemini-cli-proxy
 ```
 
-## 📄 许可证
-
-MIT License
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
 ## 📄 许可证
 
 MIT License

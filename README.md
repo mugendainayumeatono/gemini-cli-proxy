@@ -29,20 +29,38 @@ export http_proxy=http://127.0.0.1:7890
 export all_proxy=socks5://127.0.0.1:7890
 ```
 
-### Install Gemini CLI
+### Install Antigravity CLI (agy)
 
-Install Gemini CLI:
-```bash
-npm install -g @google/gemini-cli
-```
+The proxy now relies on `antigravity-cli` (`agy`) as its underlying engine. Make sure `agy` is installed in your environment.
 
-After installation, use the `gemini` command to run Gemini CLI. You need to start it once first for login and initial configuration.
+You need to start it once first for login and initial configuration.
 
 After configuration is complete, please confirm you can successfully run the following command:
 
 ```bash
-gemini -p "Hello, Gemini"
+agy -p "Hello, Gemini"
 ```
+
+## 🐳 Docker Deployment
+
+The proxy provides Docker deployment with a robust interactive authorization flow.
+
+1. **Build the image**:
+   ```bash
+   ./build.sh
+   ```
+2. **Start the service**:
+   ```bash
+   docker compose up -d
+   ```
+3. **Interactive Authorization**:
+   Since `agy` requires an initial interactive login, the container will run in a waiting state if not authorized. Use the provided script to enter the container and complete the login:
+   ```bash
+   ./enter.sh
+   # Once inside the container's bash shell, run:
+   agy
+   ```
+   After finishing the login, restart the container (`docker compose restart`).
 
 ### Start Gemini CLI Proxy
 
@@ -109,9 +127,9 @@ Add Model Provider in Cherry Studio settings:
 ### Environment Variables
 
 - `GEMINI_API_KEY`: Optional. If set, the proxy will dynamically fetch the list of supported models from the Google Gemini Web API during startup, making them available via the `/v1/models` endpoint. If not set, it defaults to a hardcoded list (`gemini-2.5-pro`, `gemini-2.5-flash`). You can get an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
-- `USE_NO_TOOLS_POLICY`: Set to `true` to disable tool usage (Agent capabilities) of the Gemini CLI. Recommended for stable proxy usage. (Default: `false`)
-- `GEMINI_POLICY_PATH`: Path to the policy JSON file. (Default: `/app/policies/no-tools.json` in container)
 - `PROXY_API_KEY`: API key for client authentication.
+
+*Note: Model restrictions and policy parameter limits have been removed, allowing the proxy to accept any model request seamlessly.*
 
 ### Command Line Arguments
 
@@ -127,7 +145,7 @@ Available options:
 - `--api-key`: API key required for client requests. (Can also be set via `PROXY_API_KEY` env var)
 - `--rate-limit`: Max requests per minute (default: 60)
 - `--max-concurrency`: Max concurrent subprocesses (default: 4)
-- `--timeout`: Gemini CLI command timeout in seconds (default: 30.0)
+- `--timeout`: CLI command timeout in seconds (default: 30.0)
 - `--debug`: Enable debug mode (enables debug logging and file watching)
 
 ## ❓ FAQ
@@ -152,14 +170,4 @@ MIT License
 
 ## 🤝 Contributing
 
-Issues and Pull Requests are welcome! 
-oxy
-```
-
-## 📄 License
-
-MIT License
-
-## 🤝 Contributing
-
-Issues and Pull Requests are welcome! 
+Issues and Pull Requests are welcome!
