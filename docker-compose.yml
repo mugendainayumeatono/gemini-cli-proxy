@@ -22,6 +22,10 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - PROXY_API_KEY=${PROXY_API_KEY:-sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7}
       - USE_NO_TOOLS_POLICY=true
+    logging:
+      driver: "k8s-file"
+      options:
+        max-size: "10m"
     ports:
       - "127.0.0.1:8765:8765"
     restart: unless-stopped
