@@ -51,7 +51,10 @@ async def lifespan(app: FastAPI):
     logging.getLogger('gemini_cli_proxy').setLevel(getattr(logging, config.log_level.upper()))
     
     logger.info(f"Starting Gemini CLI Proxy v{__version__}")
-    logger.info(f"Configuration: port={config.port}, rate_limit={config.rate_limit}/min, concurrency={config.max_concurrency}")
+    logger.info(
+        f"Configuration: command={config.gemini_command}, host={config.host}, port={config.port}, "
+        f"rate_limit={config.rate_limit}/min, concurrency={config.max_concurrency}, timeout={config.timeout}s"
+    )
     logger.debug(f"Debug logging is enabled (log_level={config.log_level})")
     
     # Fetch models from Gemini API if API key is provided
@@ -122,6 +125,7 @@ security = HTTPBearer(auto_error=False)
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify API key from Authorization header"""
     if not credentials or not credentials.credentials:
+        logger.warning("Authentication failed: API key missing in Authorization header")
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
@@ -136,6 +140,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(sec
     token = credentials.credentials
     if config.proxy_api_key:
         if token != config.proxy_api_key:
+            logger.warning("Authentication failed: Invalid API key provided")
             raise HTTPException(
                 status_code=401,
                 detail=ErrorResponse(
@@ -219,7 +224,7 @@ async def chat_completions(
     
     Implements OpenAI-compatible chat completion API
     """
-    logger.info(f"Received chat completion request: model={chat_request.model}, stream={chat_request.stream}")
+    logger.info(f"Received chat completion request: model={chat_request.model}, stream={chat_request.stream}, messages={len(chat_request.messages)}")
     
     try:
         # Handle streaming request
@@ -233,19 +238,19 @@ async def chat_completions(
     except HTTPException:
         raise
     except asyncio.TimeoutError:
-        logger.error("Gemini CLI command execution timeout")
+        logger.error(f"Chat completion failed: Gemini CLI command execution timeout ({config.timeout}s) for model={chat_request.model}")
         raise HTTPException(
-            status_code=502,
+            status_code=504,
             detail=ErrorResponse(
                 error=ErrorDetail(
                     message="Gemini CLI command execution timeout",
                     type="bad_gateway",
-                    code="502"
+                    code="504"
                 )
             ).model_dump()
         )
     except RuntimeError as e:
-        logger.error(f"Gemini CLI execution error: {e}")
+        logger.error(f"Chat completion failed: Gemini CLI execution error for model={chat_request.model}: {e}")
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -257,7 +262,7 @@ async def chat_completions(
             ).model_dump()
         )
     except Exception as e:
-        logger.error(f"Error processing chat completion request: {e}")
+        logger.error(f"Unexpected error processing chat completion request for model={chat_request.model}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=ErrorResponse(

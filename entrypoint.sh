@@ -15,10 +15,14 @@ mkdir -p "$CONFIG_DIR"
 check_agy() {
     echo "正在验证 Antigravity 连通性..." | tee -a "$LOG_FILE"
     
-    # -p 模式下测试连通性
-    if agy -p "Reply with 'pong' and nothing else. DO NOT use tools." >>"$LOG_FILE" 2>&1; then
+    # -p 模式下测试连通性，记录返回状态和退出码
+    local exit_code=0
+    agy -p "Reply with 'pong' and nothing else. DO NOT use tools." >>"$LOG_FILE" 2>&1 || exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo "Antigravity 连通性验证成功 (exit code: 0)" | tee -a "$LOG_FILE"
         return 0
     else
+        echo "Antigravity 连通性验证失败 (exit code: $exit_code)" | tee -a "$LOG_FILE"
         return 1
     fi
 }

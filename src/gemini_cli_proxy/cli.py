@@ -44,6 +44,12 @@ import uvicorn
     help="API key required for client requests. If not set, any non-empty key in Authorization header is accepted."
 )
 @click.option(
+    "--gemini-command",
+    envvar="GEMINI_COMMAND",
+    default="agy",
+    help="CLI command path to execute (default: agy)"
+)
+@click.option(
     "--debug",
     is_flag=True,
     help="Enable debug mode"
@@ -55,6 +61,7 @@ def main(
     max_concurrency: int,
     timeout: float,
     api_key: str,
+    gemini_command: str,
     debug: bool
 ):
     """Start Gemini CLI Proxy server"""
@@ -67,6 +74,12 @@ def main(
     os.environ['GEMINI_CLI_PROXY_DEBUG'] = str(debug)
     if api_key:
         os.environ['PROXY_API_KEY'] = api_key
+    os.environ['PROXY_HOST'] = host
+    os.environ['PROXY_PORT'] = str(port)
+    os.environ['PROXY_RATE_LIMIT'] = str(rate_limit)
+    os.environ['PROXY_MAX_CONCURRENCY'] = str(max_concurrency)
+    os.environ['GEMINI_TIMEOUT'] = str(timeout)
+    os.environ['GEMINI_COMMAND'] = gemini_command
     
     config.host = host
     config.port = port
@@ -74,6 +87,7 @@ def main(
     config.rate_limit = rate_limit
     config.max_concurrency = max_concurrency
     config.timeout = timeout
+    config.gemini_command = gemini_command
     config.debug = debug
     config.proxy_api_key = api_key
     

@@ -37,7 +37,8 @@ class OpenAIAdapter:
         Returns:
             OpenAI format chat completion response
         """
-        logger.info(f"Processing chat completion request, model: {request.model}, messages: {len(request.messages)}")
+        start_time = time.monotonic()
+        logger.info(f"Processing chat completion request: model={request.model}, messages={len(request.messages)}")
         
         try:
             # Call Gemini CLI
@@ -47,6 +48,7 @@ class OpenAIAdapter:
                 temperature=request.temperature,
                 max_tokens=request.max_tokens
             )
+            duration = time.monotonic() - start_time
             
             # Build OpenAI format response
             response = ChatCompletionResponse(
@@ -63,11 +65,17 @@ class OpenAIAdapter:
                 ]
             )
             
-            logger.info(f"Chat completion request processed successfully, response length: {len(response_text)}")
+            logger.info(
+                f"Chat completion request processed successfully: "
+                f"model={request.model}, duration={duration:.2f}s, response length={len(response_text)}"
+            )
             return response
             
         except Exception as e:
-            logger.error(f"Error processing chat completion request: {e}")
+            duration = time.monotonic() - start_time
+            logger.error(
+                f"Error processing chat completion request: model={request.model}, duration={duration:.2f}s: {e}"
+            )
             raise
     
     async def chat_completion_stream(self, request: ChatCompletionRequest) -> StreamingResponse:
@@ -80,10 +88,12 @@ class OpenAIAdapter:
         Returns:
             Streaming response
         """
-        logger.info(f"Processing streaming chat completion request, model: {request.model}, messages: {len(request.messages)}")
+        logger.info(f"Processing streaming chat completion request: model={request.model}, messages={len(request.messages)}")
         
         async def generate_stream():
             """Generate streaming response data"""
+            stream_start_time = time.monotonic()
+            chunk_count = 0
             completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
             created_time = int(time.time())
             
@@ -115,6 +125,7 @@ class OpenAIAdapter:
                 async for chunk in stream_generator:
                     if not chunk:
                         continue
+                    chunk_count += 1
                         
                     stream_response = ChatCompletionStreamResponse(
                         id=completion_id,
@@ -148,10 +159,18 @@ class OpenAIAdapter:
                 yield f"data: {final_response.model_dump_json()}\n\n"
                 yield "data: [DONE]\n\n"
                 
-                logger.info("Streaming chat completion request processed successfully")
+                stream_duration = time.monotonic() - stream_start_time
+                logger.info(
+                    f"Streaming chat completion request processed successfully: "
+                    f"model={request.model}, duration={stream_duration:.2f}s, chunks={chunk_count}"
+                )
                 
             except Exception as e:
-                logger.error(f"Error processing streaming chat completion request: {e}")
+                stream_duration = time.monotonic() - stream_start_time
+                logger.error(
+                    f"Error processing streaming chat completion request for model={request.model} "
+                    f"(elapsed: {stream_duration:.2f}s, chunks={chunk_count}): {e}"
+                )
                 # Send error information in OpenAI format
                 error_response = {
                     "error": {
