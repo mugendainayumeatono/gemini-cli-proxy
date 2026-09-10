@@ -11,6 +11,7 @@ import signal
 import time
 import uuid
 import base64
+import json
 from typing import List, Optional, AsyncGenerator, Tuple
 from .models import ChatMessage
 from .config import config
@@ -32,6 +33,24 @@ def format_exit_status(returncode: Optional[int]) -> str:
         except ValueError:
             return f"terminated by signal {sig_num}"
     return f"exit code {returncode} (failure)"
+
+
+async def _safe_cleanup_process(process, cmd_name: str, mode: str):
+    """Safely terminate and wait for a subprocess, guaranteed to run even if task is cancelled."""
+    if process and process.returncode is None:
+        try:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                process.kill()
+                await process.wait()
+            logger.info(
+                f"{cmd_name} {mode} process (PID: {process.pid}) terminated in cleanup "
+                f"(status: {format_exit_status(process.returncode)})"
+            )
+        except Exception as term_err:
+            logger.warning(f"Error terminating {cmd_name} {mode} process (PID: {process.pid}): {term_err}")
 
 
 class GeminiClient:
@@ -176,7 +195,7 @@ class GeminiClient:
         """
         prompt, temp_files = self._build_prompt_with_images(messages)
         cmd_name = config.gemini_command
-        cmd_args = [cmd_name, "-p", prompt]
+        cmd_args = [cmd_name, "-p", prompt, "--output-format", "stream-json"]
         
         # Real CLI doesn't support temperature and max_tokens parameters
         if temperature is not None:
@@ -218,18 +237,50 @@ class GeminiClient:
             # Read stderr concurrently in background to avoid OS pipe deadlock
             stderr_task = asyncio.create_task(process.stderr.read())
             
-            # Read from stdout incrementally
+            unparsed_lines = []
+            error_from_result = ""
+            
+            # Read from stdout incrementally (NDJSON event stream)
             while True:
                 try:
-                    chunk = await asyncio.wait_for(
-                        process.stdout.read(1024),
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(),
                         timeout=config.timeout
                     )
-                    if not chunk:
+                    if not line:
                         break
-                    chunk_count += 1
-                    total_bytes += len(chunk)
-                    yield chunk.decode('utf-8', errors='replace')
+                    
+                    line_str = line.decode('utf-8', errors='replace').strip()
+                    if not line_str:
+                        continue
+                    
+                    try:
+                        event_data = json.loads(line_str)
+                    except json.JSONDecodeError:
+                        logger.debug(f"Non-JSON stdout line from {cmd_name}: {line_str}")
+                        unparsed_lines.append(line_str)
+                        continue
+                    
+                    event_type = event_data.get("event")
+                    if event_type == "step_update":
+                        su = event_data.get("step_update", {})
+                        delta = su.get("text_delta")
+                        if delta:
+                            chunk_count += 1
+                            total_bytes += len(delta.encode('utf-8'))
+                            yield delta
+                    elif event_type == "result":
+                        result_obj = event_data.get("result", {})
+                        status = result_obj.get("status")
+                        err = result_obj.get("error")
+                        if status == "ERROR" or err:
+                            error_from_result = err or f"CLI returned status {status}"
+                        elif chunk_count == 0 and result_obj.get("response"):
+                            # Fallback: if no text_delta was received, yield full response
+                            resp = result_obj.get("response")
+                            chunk_count += 1
+                            total_bytes += len(resp.encode('utf-8'))
+                            yield resp
                 except asyncio.TimeoutError:
                     duration = time.monotonic() - start_time
                     logger.error(
@@ -252,24 +303,37 @@ class GeminiClient:
                             logger.warning(f"Error terminating {cmd_name} stream process (PID: {process.pid}): {term_err}")
                     raise RuntimeError(f"{cmd_name} execution timeout ({config.timeout} seconds)")
             
-            # Wait for command execution to complete
-            await process.wait()
+            # Wait for command execution to complete with protection
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+
             duration = time.monotonic() - start_time
             exit_code = process.returncode
             status_str = format_exit_status(exit_code)
             
-            stderr_bytes = await stderr_task if stderr_task else b""
+            stderr_bytes = b""
+            if stderr_task:
+                try:
+                    stderr_bytes = await asyncio.wait_for(stderr_task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    stderr_task.cancel()
+                    stderr_bytes = b""
             stderr_text = stderr_bytes.decode('utf-8', errors='replace').strip() if stderr_bytes else ""
             
             # Check return code
             if exit_code != 0:
-                error_msg = stderr_text if stderr_text else f"Process exited with {status_str}"
+                error_msg = stderr_text or error_from_result or ("\n".join(unparsed_lines) if unparsed_lines else f"Process exited with {status_str}")
                 simplified_msg = self._simplify_error_message(error_msg)
                 
                 logger.error(
                     f"{cmd_name} stream command failed with {status_str} "
                     f"(PID: {process.pid}, duration: {duration:.2f}s, chunks: {chunk_count}, bytes: {total_bytes})\n"
                     f"Stderr: {stderr_text or '<empty>'}"
+                    + (f"\nError from result: {error_from_result}" if error_from_result else "")
                 )
                 if simplified_msg:
                     logger.info(f"{cmd_name} stream error recognized: {simplified_msg} [raw {status_str}]")
@@ -277,6 +341,20 @@ class GeminiClient:
                 else:
                     raise RuntimeError(f"{cmd_name} execution failed ({status_str}): {error_msg}")
             
+            if error_from_result:
+                simplified_msg = self._simplify_error_message(error_from_result)
+                logger.error(f"{cmd_name} stream command reported error in result: {error_from_result}")
+                raise RuntimeError(f"{cmd_name} execution failed: {simplified_msg or error_from_result}")
+
+            # Check if process exited successfully but produced 0 chunks (empty output)
+            if chunk_count == 0:
+                logger.error(
+                    f"{cmd_name} stream command completed with {status_str} but produced NO output "
+                    f"(PID: {process.pid}, duration: {duration:.2f}s).\n"
+                    f"Stderr: {stderr_text or '<empty>'}"
+                )
+                raise RuntimeError(f"{cmd_name} produced empty response ({status_str}): {stderr_text or 'no output from command'}")
+
             # exit_code == 0
             logger.info(
                 f"{cmd_name} stream command completed successfully with {status_str} "
@@ -287,6 +365,14 @@ class GeminiClient:
                     f"{cmd_name} stream process (PID: {process.pid}) exited with code 0 but produced stderr output: {stderr_text}"
                 )
             
+        except (asyncio.CancelledError, GeneratorExit):
+            duration = time.monotonic() - start_time
+            pid = process.pid if process else "unknown"
+            logger.warning(
+                f"{cmd_name} stream request cancelled / client disconnected "
+                f"(PID: {pid}, elapsed: {duration:.2f}s, chunks: {chunk_count}, bytes: {total_bytes})"
+            )
+            raise
         except RuntimeError:
             raise
         except Exception as e:
@@ -297,18 +383,9 @@ class GeminiClient:
         finally:
             if stderr_task and not stderr_task.done():
                 stderr_task.cancel()
-            # Clean up process if still running
+            # Clean up process if still running (shielded to guarantee execution even during cancellation)
             if process and process.returncode is None:
-                try:
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        process.kill()
-                        await process.wait()
-                    logger.info(f"{cmd_name} stream process (PID: {process.pid}) terminated in cleanup (status: {format_exit_status(process.returncode)})")
-                except Exception:
-                    pass
+                await asyncio.shield(_safe_cleanup_process(process, cmd_name, "stream"))
                     
             # Clean up temporary files (skip in debug mode)
             if not config.debug:
@@ -342,7 +419,7 @@ class GeminiClient:
         """
         prompt, temp_files = self._build_prompt_with_images(messages)
         cmd_name = config.gemini_command
-        cmd_args = [cmd_name, "-p", prompt]
+        cmd_args = [cmd_name, "-p", prompt, "--output-format", "text"]
         
         # Real CLI doesn't support temperature and max_tokens parameters
         if temperature is not None:
@@ -405,6 +482,15 @@ class GeminiClient:
                 else:
                     raise RuntimeError(f"{cmd_name} execution failed ({status_str}): {error_msg}")
             
+            # Check if process exited successfully but produced empty output
+            if not stdout_text:
+                logger.error(
+                    f"{cmd_name} command completed with {status_str} but produced empty output "
+                    f"(PID: {process.pid}, duration: {duration:.2f}s).\n"
+                    f"Stderr: {stderr_text or '<empty>'}"
+                )
+                raise RuntimeError(f"{cmd_name} produced empty response ({status_str}): {stderr_text or 'no output from command'}")
+
             # exit_code == 0
             logger.info(
                 f"{cmd_name} command completed successfully with {status_str} "
@@ -417,6 +503,14 @@ class GeminiClient:
             logger.debug(f"{cmd_name} response content: {stdout_text}")
             return stdout_text
             
+        except (asyncio.CancelledError, GeneratorExit):
+            duration = time.monotonic() - start_time
+            pid = process.pid if process else "unknown"
+            logger.warning(
+                f"{cmd_name} command request cancelled / client disconnected "
+                f"(PID: {pid}, elapsed: {duration:.2f}s)"
+            )
+            raise
         except asyncio.TimeoutError:
             duration = time.monotonic() - start_time
             pid = process.pid if process else "unknown"
@@ -447,16 +541,7 @@ class GeminiClient:
             raise RuntimeError(f"Error executing {cmd_name} command: {str(e)}") from e
         finally:
             if process and process.returncode is None:
-                try:
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        process.kill()
-                        await process.wait()
-                    logger.info(f"{cmd_name} process (PID: {process.pid}) terminated in cleanup (status: {format_exit_status(process.returncode)})")
-                except Exception:
-                    pass
+                await asyncio.shield(_safe_cleanup_process(process, cmd_name, "sync"))
             # Clean up temporary files (skip in debug mode)
             if not config.debug:
                 for temp_file in temp_files:

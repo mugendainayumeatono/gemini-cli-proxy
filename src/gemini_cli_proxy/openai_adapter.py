@@ -8,6 +8,7 @@ import time
 import uuid
 import logging
 import json
+import asyncio
 from typing import AsyncGenerator
 from fastapi.responses import StreamingResponse
 
@@ -71,6 +72,12 @@ class OpenAIAdapter:
             )
             return response
             
+        except (asyncio.CancelledError, GeneratorExit):
+            duration = time.monotonic() - start_time
+            logger.warning(
+                f"Chat completion client disconnected / request cancelled: model={request.model}, duration={duration:.2f}s"
+            )
+            raise
         except Exception as e:
             duration = time.monotonic() - start_time
             logger.error(
@@ -165,6 +172,13 @@ class OpenAIAdapter:
                     f"model={request.model}, duration={stream_duration:.2f}s, chunks={chunk_count}"
                 )
                 
+            except (asyncio.CancelledError, GeneratorExit):
+                stream_duration = time.monotonic() - stream_start_time
+                logger.warning(
+                    f"Streaming chat completion client disconnected / request cancelled for model={request.model} "
+                    f"(elapsed: {stream_duration:.2f}s, chunks={chunk_count})"
+                )
+                raise
             except Exception as e:
                 stream_duration = time.monotonic() - stream_start_time
                 logger.error(
@@ -188,6 +202,7 @@ class OpenAIAdapter:
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Headers": "*",
             }

@@ -160,9 +160,17 @@ async def test_execute_gemini_command_stream_success(caplog):
     mock_process.returncode = 0
     mock_process.wait = AsyncMock(return_value=0)
     
-    # Mock stdout stream
+    # Mock stdout stream with NDJSON lines
     mock_stdout = MagicMock()
-    mock_stdout.read = AsyncMock(side_effect=[b"Hello ", b"streaming ", b"world", b""])
+    stream_lines = [
+        b'{"event":"init","conversation_id":"23456"}\n',
+        b'{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"Hello "}}\n',
+        b'{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"streaming "}}\n',
+        b'{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"world"}}\n',
+        b'{"event":"result","result":{"status":"SUCCESS","response":"Hello streaming world"}}\n',
+        b''
+    ]
+    mock_stdout.readline = AsyncMock(side_effect=stream_lines)
     mock_process.stdout = mock_stdout
     
     # Mock stderr stream
@@ -194,7 +202,7 @@ async def test_execute_gemini_command_stream_failure_records_exit_code(caplog):
     
     # Empty stdout
     mock_stdout = MagicMock()
-    mock_stdout.read = AsyncMock(return_value=b"")
+    mock_stdout.readline = AsyncMock(return_value=b"")
     mock_process.stdout = mock_stdout
     
     # Stderr with error details
@@ -212,3 +220,138 @@ async def test_execute_gemini_command_stream_failure_records_exit_code(caplog):
             assert "exit code 1 (failure)" in str(exc_info.value)
             assert "stream command failed with exit code 1 (failure)" in caplog.text
             assert "fatal: server returned status 503" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execute_gemini_command_stream_empty_output_raises_error(caplog):
+    client = GeminiClient()
+    mock_process = MagicMock()
+    mock_process.pid = 23458
+    mock_process.returncode = 0
+    mock_process.wait = AsyncMock(return_value=0)
+    
+    mock_stdout = MagicMock()
+    mock_stdout.readline = AsyncMock(return_value=b"")
+    mock_process.stdout = mock_stdout
+    
+    mock_stderr = MagicMock()
+    mock_stderr.read = AsyncMock(return_value=b"")
+    mock_process.stderr = mock_stderr
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        with caplog.at_level(logging.INFO, logger="gemini_cli_proxy"):
+            messages = [ChatMessage(role="user", content="Hi")]
+            with pytest.raises(RuntimeError) as exc_info:
+                async for _ in client.chat_completion_stream(messages=messages, model="gemini-2.5-flash"):
+                    pass
+            
+            assert "empty response" in str(exc_info.value)
+            assert "produced NO output" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execute_gemini_command_stream_cancellation_logs_warning_and_cleans_up(caplog):
+    client = GeminiClient()
+    mock_process = MagicMock()
+    mock_process.pid = 23459
+    mock_process.returncode = None
+    mock_process.terminate = MagicMock()
+    
+    async def mock_wait():
+        mock_process.returncode = -15
+        return -15
+    mock_process.wait = AsyncMock(side_effect=mock_wait)
+    
+    # stdout that hangs forever
+    mock_stdout = MagicMock()
+    async def mock_readline(*args):
+        await asyncio.sleep(100)
+        return b""
+    mock_stdout.readline = mock_readline
+    mock_process.stdout = mock_stdout
+    
+    mock_stderr = MagicMock()
+    mock_stderr.read = AsyncMock(return_value=b"")
+    mock_process.stderr = mock_stderr
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        with caplog.at_level(logging.INFO, logger="gemini_cli_proxy"):
+            messages = [ChatMessage(role="user", content="Hi")]
+            
+            async def run_and_cancel():
+                task = asyncio.create_task(
+                    client._execute_gemini_command_stream(messages=messages, model="gemini-2.5-flash").asend(None)
+                )
+                await asyncio.sleep(0.01)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            await run_and_cancel()
+            
+            assert "cancelled / client disconnected" in caplog.text
+            assert "terminated in cleanup" in caplog.text
+            assert mock_process.terminate.called
+
+
+@pytest.mark.asyncio
+async def test_execute_gemini_command_stream_fallback_result_response(caplog):
+    client = GeminiClient()
+    mock_process = MagicMock()
+    mock_process.pid = 23460
+    mock_process.returncode = 0
+    mock_process.wait = AsyncMock(return_value=0)
+    
+    # Result response without prior text_delta
+    mock_stdout = MagicMock()
+    stream_lines = [
+        b'{"event":"init","conversation_id":"23460"}\n',
+        b'{"event":"result","result":{"status":"SUCCESS","response":"Full response fallback"}}\n',
+        b''
+    ]
+    mock_stdout.readline = AsyncMock(side_effect=stream_lines)
+    mock_process.stdout = mock_stdout
+    
+    mock_stderr = MagicMock()
+    mock_stderr.read = AsyncMock(return_value=b"")
+    mock_process.stderr = mock_stderr
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        messages = [ChatMessage(role="user", content="Hi")]
+        chunks = []
+        async for chunk in client.chat_completion_stream(messages=messages, model="gemini-2.5-flash"):
+            chunks.append(chunk)
+        
+        assert "".join(chunks) == "Full response fallback"
+
+
+@pytest.mark.asyncio
+async def test_execute_gemini_command_stream_error_in_result_event(caplog):
+    client = GeminiClient()
+    mock_process = MagicMock()
+    mock_process.pid = 23461
+    mock_process.returncode = 0
+    mock_process.wait = AsyncMock(return_value=0)
+    
+    mock_stdout = MagicMock()
+    stream_lines = [
+        b'{"event":"init","conversation_id":"23461"}\n',
+        b'{"event":"result","result":{"status":"ERROR","error":"quota exceeded"}}\n',
+        b''
+    ]
+    mock_stdout.readline = AsyncMock(side_effect=stream_lines)
+    mock_process.stdout = mock_stdout
+    
+    mock_stderr = MagicMock()
+    mock_stderr.read = AsyncMock(return_value=b"")
+    mock_process.stderr = mock_stderr
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        messages = [ChatMessage(role="user", content="Hi")]
+        with pytest.raises(RuntimeError) as exc_info:
+            async for _ in client.chat_completion_stream(messages=messages, model="gemini-2.5-flash"):
+                pass
+        
+        assert "rate limit exceeded" in str(exc_info.value)
