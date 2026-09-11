@@ -116,7 +116,7 @@ Add Model Provider in Cherry Studio settings:
 - Provider Type: OpenAI
 - API Host: `http://localhost:8765`
 - API Key: Any string works
-- Model Name: `gemini-2.5-pro` or `gemini-2.5-flash`
+- Model Name: `gemini-3.8-flash-high`, `gemini-3.7-flash-high`, or any model returned by `/v1/models`
 
 ![Cherry Studio Config 1](./img/cherry-studio-1.jpg)
 
@@ -126,10 +126,10 @@ Add Model Provider in Cherry Studio settings:
 
 ### Environment Variables
 
-- `GEMINI_API_KEY`: Optional. If set, the proxy will dynamically fetch the list of supported models from the Google Gemini Web API during startup, making them available via the `/v1/models` endpoint. If not set, it defaults to a hardcoded list (`gemini-2.5-pro`, `gemini-2.5-flash`). You can get an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 - `PROXY_API_KEY`: API key for client authentication.
+- `GEMINI_COMMAND`: CLI command path to execute (default: `agy`).
 
-*Note: Model restrictions and policy parameter limits have been removed, allowing the proxy to accept any model request seamlessly.*
+*Note: During startup, the proxy automatically executes `agy models` to dynamically discover supported models for the `/v1/models` endpoint without needing any external Gemini API keys.*
 
 ### Command Line Arguments
 

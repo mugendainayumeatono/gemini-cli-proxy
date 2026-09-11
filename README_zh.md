@@ -116,7 +116,7 @@ print(response.choices[0].message.content)
 - Provider Type 选择: OpenAI
 - API Host 填写: `http://localhost:8765`
 - API Key 填写: 需与服务端配置的 API Key 保持一致（若服务端未配置，则可填任意非空字符串）
-- Model Name 填写: `gemini-2.5-pro` 或 `gemini-2.5-flash`
+- Model Name 填写: `gemini-3.8-flash-high`、`gemini-3.7-flash-high` 或 `/v1/models` 返回的任意模型标识
 
 ![Cherry Studio Config 1](./img/cherry-studio-1.jpg)
 
@@ -126,10 +126,10 @@ print(response.choices[0].message.content)
 
 ### 环境变量
 
-- `GEMINI_API_KEY`: 可选。如果设置了此环境变量，代理服务在启动时会通过 Google Gemini Web API 动态获取支持的模型列表，供客户端通过 `/v1/models` 接口查询。如果没有设置，则默认使用内部硬编码的列表 (`gemini-2.5-pro`, `gemini-2.5-flash`)。你可以在 [Google AI Studio](https://aistudio.google.com/app/apikey) 免费获取 API Key。
 - `PROXY_API_KEY`: 用于客户端认证的 API Key。
+- `GEMINI_COMMAND`: 底层执行的 CLI 命令路径（默认：`agy`）。
 
-*注：新版本代理已移除了对模型的硬性限制以及相关的 policy 强限制参数，提供更灵活透明的代理体验。*
+*注：代理服务在启动时会自动通过 `agy models` 命令动态获取当前环境所支持的完整模型列表供 `/v1/models` 查询，无需配置任何外部 Gemini API Key。*
 
 ### 命令行参数
 

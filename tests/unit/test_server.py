@@ -53,3 +53,29 @@ def test_chat_completions_cli_error_logs_and_returns_502(client, caplog):
             assert "error" in data
             assert "exit code 1 (failure)" in data["error"]["message"]
             assert "Chat completion failed: Gemini CLI execution error" in caplog.text
+
+
+def test_lifespan_fetch_models_success():
+    mock_stdout = b"gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6\n"
+    mock_process = AsyncMock()
+    mock_process.communicate.return_value = (mock_stdout, b"Fetching available models...\n")
+    mock_process.returncode = 0
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        with TestClient(app):
+            assert "gemini-3.8-flash-high" in config.supported_models
+            assert "claude-sonnet-4-6" in config.supported_models
+
+
+def test_lifespan_fetch_models_failure_fallback(caplog):
+    original_models = list(config.supported_models)
+    mock_process = AsyncMock()
+    mock_process.communicate.return_value = (b"", b"Command error")
+    mock_process.returncode = 1
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        with caplog.at_level(logging.WARNING, logger="gemini_cli_proxy"):
+            with TestClient(app):
+                assert len(config.supported_models) > 0
+                assert "Failed to fetch models" in caplog.text
+

@@ -19,7 +19,6 @@ services:
       # 挂载本地入口脚本，使修改直接生效，无需重新构建镜像
       - ./entrypoint.sh:/entrypoint.sh
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - PROXY_API_KEY=${PROXY_API_KEY:-sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7}
       - USE_NO_TOOLS_POLICY=true
     logging:

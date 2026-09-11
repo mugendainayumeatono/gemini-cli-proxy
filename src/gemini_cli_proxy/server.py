@@ -7,9 +7,6 @@ Implements HTTP service and API endpoints
 import asyncio
 import logging
 import traceback
-import json
-import urllib.request
-import urllib.error
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -57,41 +54,53 @@ async def lifespan(app: FastAPI):
     )
     logger.debug(f"Debug logging is enabled (log_level={config.log_level})")
     
-    # Fetch models from Gemini API if API key is provided
-    if config.api_key:
+    # Fetch supported models from CLI tool (e.g. agy models)
+    cmd_name = config.gemini_command
+    try:
+        logger.info(f"Attempting to fetch supported models from '{cmd_name} models'...")
+        process = await asyncio.create_subprocess_exec(
+            cmd_name,
+            "models",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
         try:
-            logger.info("Attempting to fetch supported models from Gemini API...")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={config.api_key}"
-            req = urllib.request.Request(url, headers={'Content-Type': 'application/json'})
-            
-            # Run blocking HTTP request in a separate thread
-            def fetch_models():
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    return json.loads(response.read().decode())
-            
-            data = await asyncio.to_thread(fetch_models)
-            
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=45.0)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+            raise
+
+        if process.returncode == 0 and stdout:
             fetched_models = []
-            for model in data.get("models", []):
-                name = model.get("name", "")
-                if name.startswith("models/"):
-                    name = name[7:]
-                fetched_models.append(name)
-            
+            for raw_line in stdout.decode("utf-8", errors="replace").splitlines():
+                line = raw_line.strip()
+                if not line or "Fetching" in line:
+                    continue
+                parts = line.split()
+                if parts:
+                    fetched_models.append(parts[0])
+
             if fetched_models:
                 config.supported_models = fetched_models
-                logger.info(f"Successfully updated supported models from Gemini API: {len(fetched_models)} models loaded")
+                logger.info(f"Successfully updated supported models from {cmd_name}: {len(fetched_models)} models loaded")
             else:
-                logger.warning("Gemini API returned an empty model list, falling back to hardcoded models")
-                
-        except urllib.error.HTTPError as e:
-            logger.error(f"Failed to fetch models from Gemini API (HTTP {e.code}), using hardcoded models. Reason: {e.reason}")
-        except urllib.error.URLError as e:
-            logger.error(f"Failed to fetch models from Gemini API (network error), using hardcoded models. Reason: {e.reason}")
-        except Exception as e:
-            logger.error(f"Failed to fetch or parse models from Gemini API, using hardcoded models. Reason: {e}")
-    else:
-        logger.info("GEMINI_API_KEY not set, using hardcoded supported models")
+                logger.warning(f"'{cmd_name} models' returned an empty model list, falling back to hardcoded models")
+        else:
+            stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+            logger.warning(
+                f"Failed to fetch models from '{cmd_name} models' (exit code: {process.returncode}), using hardcoded models. "
+                f"Stderr: {stderr_text or '<empty>'}"
+            )
+    except asyncio.TimeoutError:
+        logger.warning(f"Timed out fetching models from '{cmd_name} models' (timeout: 45s), using hardcoded models")
+    except FileNotFoundError:
+        logger.warning(f"Command '{cmd_name}' not found in PATH, using hardcoded models")
+    except Exception as e:
+        logger.error(f"Failed to fetch or parse models from '{cmd_name} models', using hardcoded models. Reason: {e}")
         
     yield
     logger.info("Shutting down Gemini CLI Proxy")
