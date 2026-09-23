@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# 确保 HOME 环境变量在所有场景下可用（包括 docker exec 进入的非登录 shell）
+ENV HOME=/root
+
 # 安装 agy CLI 并创建全局软链接
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
     && ln -s /root/.local/bin/agy /usr/local/bin/agy

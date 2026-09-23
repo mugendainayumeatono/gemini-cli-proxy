@@ -8,7 +8,8 @@ if [ "$(docker ps -q -f name=^/${CONTAINER_NAME}$)" ]; then
     echo "✅ 发现正在运行的容器 $CONTAINER_NAME，正在进入..."
     echo "===================================================="
     # 使用 docker exec 交互式进入容器内的 bash 终端
-    docker exec -it $CONTAINER_NAME /bin/bash
+    # 显式传递 HOME，解决 podman exec 在 rootless 模式下清空 HOME 的问题
+    docker exec -it -e HOME=/root $CONTAINER_NAME /bin/bash
 else
     echo "===================================================="
     echo "❌ 容器 $CONTAINER_NAME 未启动或不存在！"
