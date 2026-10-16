@@ -196,6 +196,8 @@ class GeminiClient:
         prompt, temp_files = self._build_prompt_with_images(messages)
         cmd_name = config.gemini_command
         cmd_args = [cmd_name, "-p", prompt, "--output-format", "stream-json"]
+        if config.effort:
+            cmd_args.extend(["--effort", config.effort])
         
         # Real CLI doesn't support temperature and max_tokens parameters
         if temperature is not None:
@@ -420,6 +422,8 @@ class GeminiClient:
         prompt, temp_files = self._build_prompt_with_images(messages)
         cmd_name = config.gemini_command
         cmd_args = [cmd_name, "-p", prompt, "--output-format", "text"]
+        if config.effort:
+            cmd_args.extend(["--effort", config.effort])
         
         # Real CLI doesn't support temperature and max_tokens parameters
         if temperature is not None:

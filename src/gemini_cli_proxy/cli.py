@@ -22,18 +22,21 @@ import uvicorn
 )
 @click.option(
     "--rate-limit",
+    envvar="PROXY_RATE_LIMIT",
     default=60,
     type=int,
     help="Maximum requests per minute"
 )
 @click.option(
     "--max-concurrency",
+    envvar="PROXY_MAX_CONCURRENCY",
     default=4,
     type=int,
     help="Maximum concurrent subprocesses"
 )
 @click.option(
     "--timeout",
+    envvar="GEMINI_TIMEOUT",
     default=120.0,
     type=float,
     help="Gemini CLI command timeout in seconds"

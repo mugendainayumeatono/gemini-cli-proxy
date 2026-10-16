@@ -22,6 +22,7 @@ class Config:
         
         # Gemini CLI configuration
         self.gemini_command: str = os.environ.get('GEMINI_COMMAND', 'agy')  # Gemini CLI command path
+        self.effort: str = os.environ.get('GEMINI_EFFORT', 'low')  # Reasoning effort (low|medium|high|xhigh|max)
         self.timeout: float = float(os.environ.get('GEMINI_TIMEOUT', '120.0'))
         
         # Policy configuration
