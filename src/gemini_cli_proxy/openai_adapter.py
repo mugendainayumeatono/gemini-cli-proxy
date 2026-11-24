@@ -20,6 +20,7 @@ from .models import (
     ChatCompletionStreamChoice,
     ChatMessage
 )
+from .acp_client import ACPError
 from .gemini_client import gemini_client
 
 logger = logging.getLogger('gemini_cli_proxy')
@@ -179,6 +180,21 @@ class OpenAIAdapter:
                     f"(elapsed: {stream_duration:.2f}s, chunks={chunk_count})"
                 )
                 raise
+            except ACPError as e:
+                stream_duration = time.monotonic() - stream_start_time
+                logger.error(
+                    f"ACP error processing streaming chat completion request [{e.code}] for model={request.model} "
+                    f"(elapsed: {stream_duration:.2f}s, chunks={chunk_count}): {e}"
+                )
+                error_response = {
+                    "error": {
+                        "message": str(e),
+                        "type": "acp_error",
+                        "code": e.code
+                    }
+                }
+                yield f"data: {json.dumps(error_response)}\n\n"
+                yield "data: [DONE]\n\n"
             except Exception as e:
                 stream_duration = time.monotonic() - stream_start_time
                 logger.error(

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from gemini_cli_proxy.acp_client import ACPError
 from gemini_cli_proxy.server import app
 from gemini_cli_proxy.config import config
 
@@ -78,4 +79,71 @@ def test_lifespan_fetch_models_failure_fallback(caplog):
             with TestClient(app):
                 assert len(config.supported_models) > 0
                 assert "Failed to fetch models" in caplog.text
+
+
+def test_lifespan_acp_mode_starts_and_stops_client(monkeypatch):
+    monkeypatch.setattr(config, "acp_mode", True)
+    mock_stdout = b"gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n"
+    mock_process = AsyncMock()
+    mock_process.communicate.return_value = (mock_stdout, b"")
+    mock_process.returncode = 0
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)), \
+         patch("gemini_cli_proxy.server.acp_client.start", AsyncMock()) as mock_start, \
+         patch("gemini_cli_proxy.server.acp_client.stop", AsyncMock()) as mock_stop:
+        with TestClient(app):
+            mock_start.assert_awaited_once()
+        mock_stop.assert_awaited_once()
+
+
+def test_chat_completions_acp_error_returns_502(client, caplog):
+    with patch(
+        "gemini_cli_proxy.gemini_client.gemini_client.chat_completion",
+        AsyncMock(side_effect=ACPError("Permission denied by policy", code="acp_permission_required"))
+    ):
+        with caplog.at_level(logging.ERROR, logger="gemini_cli_proxy"):
+            payload = {
+                "model": "gemini-3.8-flash-low",
+                "messages": [{"role": "user", "content": "Hello"}]
+            }
+            response = client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": "Bearer test-key"}
+            )
+            assert response.status_code == 502
+            data = response.json()
+            assert data["error"]["type"] == "acp_error"
+            assert data["error"]["code"] == "acp_permission_required"
+            assert "Permission denied by policy" in data["error"]["message"]
+            assert "acp_permission_required" in caplog.text
+
+
+def test_chat_completions_stream_acp_error_emits_sse_error(client, caplog):
+    async def failing_stream(*args, **kwargs):
+        raise ACPError("Permission denied in stream", code="acp_permission_required")
+        yield  # pragma: no cover
+
+    with patch(
+        "gemini_cli_proxy.gemini_client.gemini_client.chat_completion_stream",
+        side_effect=failing_stream
+    ):
+        with caplog.at_level(logging.ERROR, logger="gemini_cli_proxy"):
+            payload = {
+                "model": "gemini-3.8-flash-low",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": True
+            }
+            response = client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": "Bearer test-key"}
+            )
+            assert response.status_code == 200
+            body = response.text
+            assert '"code": "acp_permission_required"' in body
+            assert '"type": "acp_error"' in body
+            assert "data: [DONE]" in body
+            assert "acp_permission_required" in caplog.text
+
 

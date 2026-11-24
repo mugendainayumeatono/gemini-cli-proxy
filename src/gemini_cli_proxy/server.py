@@ -18,6 +18,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from . import __version__
+from .acp_client import ACPError, acp_client
 from .config import config
 from .models import (
     ChatCompletionRequest,
@@ -49,7 +50,7 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"Starting Gemini CLI Proxy v{__version__}")
     logger.info(
-        f"Configuration: command={config.gemini_command}, host={config.host}, port={config.port}, "
+        f"Configuration: command={config.gemini_command}, acp_mode={config.acp_mode}, host={config.host}, port={config.port}, "
         f"rate_limit={config.rate_limit}/min, concurrency={config.max_concurrency}, timeout={config.timeout}s"
     )
     logger.debug(f"Debug logging is enabled (log_level={config.log_level})")
@@ -102,8 +103,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to fetch or parse models from '{cmd_name} models', using hardcoded models. Reason: {e}")
         
-    yield
-    logger.info("Shutting down Gemini CLI Proxy")
+    if config.acp_mode:
+        await acp_client.start()
+
+    try:
+        yield
+    finally:
+        if config.acp_mode:
+            await acp_client.stop()
+        logger.info("Shutting down Gemini CLI Proxy")
 
 
 # Create FastAPI application
@@ -255,6 +263,18 @@ async def chat_completions(
                     message="Gemini CLI command execution timeout",
                     type="bad_gateway",
                     code="504"
+                )
+            ).model_dump()
+        )
+    except ACPError as e:
+        logger.error(f"Chat completion failed: ACP error [{e.code}] for model={chat_request.model}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    message=str(e),
+                    type="acp_error",
+                    code=e.code
                 )
             ).model_dump()
         )

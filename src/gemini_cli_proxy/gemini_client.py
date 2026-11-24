@@ -140,6 +140,11 @@ class GeminiClient:
             asyncio.TimeoutError: Timeout error
             subprocess.CalledProcessError: Command execution error
         """
+        if config.acp_mode:
+            from .acp_client import acp_client
+            return await acp_client.chat_completion(
+                messages, model, temperature, max_tokens, **kwargs
+            )
         async with self.semaphore:
             return await self._execute_gemini_command(
                 messages, model, temperature, max_tokens, **kwargs
@@ -166,6 +171,13 @@ class GeminiClient:
         Yields:
             Response text chunks
         """
+        if config.acp_mode:
+            from .acp_client import acp_client
+            async for chunk in acp_client.chat_completion_stream(
+                messages, model, temperature, max_tokens, **kwargs
+            ):
+                yield chunk
+            return
         async with self.semaphore:
             async for chunk in self._execute_gemini_command_stream(
                 messages, model, temperature, max_tokens, **kwargs

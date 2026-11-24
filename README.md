@@ -128,6 +128,7 @@ Add Model Provider in Cherry Studio settings:
 
 - `PROXY_API_KEY`: API key for client authentication.
 - `GEMINI_COMMAND`: CLI command path to execute (default: `agy`).
+- `GEMINI_ACP_MODE`: Set to `true` to enable ACP mode, which keeps a persistent background `agy acp` process (currently plain-text output only; tool calls, permission prompts, and non-text outputs return HTTP 502).
 
 *Note: During startup, the proxy automatically executes `agy models` to dynamically discover supported models for the `/v1/models` endpoint without needing any external Gemini API keys.*
 
@@ -146,6 +147,7 @@ Available options:
 - `--rate-limit`: Max requests per minute (default: 60)
 - `--max-concurrency`: Max concurrent subprocesses (default: 4)
 - `--timeout`: CLI command timeout in seconds (default: 30.0)
+- `--acp`: Enable ACP mode with a persistent background `agy acp` process (currently plain-text output only; can also be set via `GEMINI_ACP_MODE` env var)
 - `--debug`: Enable debug mode (enables debug logging and file watching)
 
 ## ❓ FAQ
