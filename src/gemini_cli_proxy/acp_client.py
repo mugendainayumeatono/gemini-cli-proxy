@@ -12,7 +12,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Set, Tuple
 
 import acp
 from acp import PROTOCOL_VERSION, RequestError
@@ -44,6 +44,7 @@ from acp.schema import (
 )
 
 from . import __version__
+from .audit import record_audit
 from .config import config
 from .gemini_client import format_exit_status
 from .models import ChatMessage
@@ -500,6 +501,30 @@ class ACPClient:
         except Exception as e:
             logger.debug(f"ACP stderr reader stopped for PID {pid}: {e}")
 
+    def _make_audit_observer(self, pid: Optional[int]) -> Callable[[Any], None]:
+        """Create a stream observer that records raw ACP JSON-RPC payloads to the audit log."""
+
+        def _observe(event: Any) -> None:
+            raw_dir = getattr(event, "direction", None)
+            direction_val = getattr(raw_dir, "value", raw_dir)
+            direction = "input" if direction_val == "outgoing" else "output"
+            message = getattr(event, "message", None)
+            session_id: Optional[str] = None
+            if isinstance(message, dict):
+                params = message.get("params")
+                result = message.get("result")
+                if isinstance(params, dict):
+                    sid = params.get("sessionId") or params.get("session_id")
+                    if isinstance(sid, str):
+                        session_id = sid
+                if session_id is None and isinstance(result, dict):
+                    sid = result.get("sessionId") or result.get("session_id")
+                    if isinstance(sid, str):
+                        session_id = sid
+            record_audit(direction, message, mode="acp", pid=pid, session_id=session_id)
+
+        return _observe
+
     async def _start_unlocked(self) -> None:
         if self._conn is not None and self._process is not None and self._process.returncode is None:
             return
@@ -546,7 +571,15 @@ class ACPClient:
             self._stderr_task = asyncio.create_task(self._drain_stderr(proc.stderr, proc.pid))
 
         try:
-            conn = acp.connect_to_agent(self._handler, proc.stdin, proc.stdout)
+            if config.audit_enabled:
+                conn = acp.connect_to_agent(
+                    self._handler,
+                    proc.stdin,
+                    proc.stdout,
+                    observers=[self._make_audit_observer(proc.pid)],
+                )
+            else:
+                conn = acp.connect_to_agent(self._handler, proc.stdin, proc.stdout)
             self._conn = conn
             init_resp = await asyncio.wait_for(
                 conn.initialize(

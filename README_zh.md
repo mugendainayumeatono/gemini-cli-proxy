@@ -129,6 +129,8 @@ print(response.choices[0].message.content)
 - `PROXY_API_KEY`: 用于客户端认证的 API Key。
 - `GEMINI_COMMAND`: 底层执行的 CLI 命令路径（默认：`agy`）。
 - `GEMINI_ACP_MODE`: 设为 `true` 时启用 ACP 模式，在后台维护常驻的 `agy acp` 进程（现阶段仅支持纯文本输出；若触发工具调用、权限确认或非文本输出将返回 HTTP 502）。
+- `GEMINI_AUDIT`: 设为 `true` 时开启审计日志，将经过 `agy` 的原始输入/输出 JSON 记录到独立 JSONL 文件（默认：`false`；备用环境变量：`PROXY_AUDIT`）。
+- `GEMINI_AUDIT_FILE`: 审计 JSONL 日志文件路径（在 Docker 中 `/app/logs` 存在时默认为 `/app/logs/audit.jsonl`，否则为 `logs/audit.jsonl`；备用环境变量：`PROXY_AUDIT_FILE`）。
 
 *注：代理服务在启动时会自动通过 `agy models` 命令动态获取当前环境所支持的完整模型列表供 `/v1/models` 查询，无需配置任何外部 Gemini API Key。*
 
@@ -148,6 +150,8 @@ gemini-cli-proxy --help
 - `--max-concurrency`: 最大并发子进程数 (默认: 4)
 - `--timeout`: CLI 命令超时时间，单位秒 (默认: 30.0)
 - `--acp`: 启用 ACP 模式并在后台运行常驻 `agy acp` 进程（现阶段仅支持纯文本输出；也可通过 `GEMINI_ACP_MODE` 环境变量设置）
+- `--audit`: 开启审计日志，将原始 `agy` 输入/输出 JSON 写入独立 JSONL 文件（也可通过 `GEMINI_AUDIT` 环境变量设置）
+- `--audit-file`: 指定审计 JSONL 文件路径（也可通过 `GEMINI_AUDIT_FILE` 环境变量设置）
 - `--debug`: 启用调试模式 (启用调试日志和文件监控)
 
 ## ❓ 常见问题

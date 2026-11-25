@@ -21,6 +21,8 @@ services:
       - GEMINI_ACP_MODE=true
       - PROXY_MAX_CONCURRENCY=2
       - GEMINI_TIMEOUT=300
+      # Raw agy JSON audit logs are written to /app/logs/audit.jsonl (mapped to ./logs/audit.jsonl on host), customizable via GEMINI_AUDIT_FILE
+      - GEMINI_AUDIT=true
     logging:
       driver: "k8s-file"
       options:

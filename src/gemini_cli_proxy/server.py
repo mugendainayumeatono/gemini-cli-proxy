@@ -49,9 +49,12 @@ async def lifespan(app: FastAPI):
     logging.getLogger('gemini_cli_proxy').setLevel(getattr(logging, config.log_level.upper()))
     
     logger.info(f"Starting Gemini CLI Proxy v{__version__}")
+    audit_info = f", audit={config.audit_enabled}"
+    if config.audit_enabled:
+        audit_info += f", audit_file={config.audit_file}"
     logger.info(
         f"Configuration: command={config.gemini_command}, acp_mode={config.acp_mode}, host={config.host}, port={config.port}, "
-        f"rate_limit={config.rate_limit}/min, concurrency={config.max_concurrency}, timeout={config.timeout}s"
+        f"rate_limit={config.rate_limit}/min, concurrency={config.max_concurrency}, timeout={config.timeout}s{audit_info}"
     )
     logger.debug(f"Debug logging is enabled (log_level={config.log_level})")
     

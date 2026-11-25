@@ -129,6 +129,8 @@ Add Model Provider in Cherry Studio settings:
 - `PROXY_API_KEY`: API key for client authentication.
 - `GEMINI_COMMAND`: CLI command path to execute (default: `agy`).
 - `GEMINI_ACP_MODE`: Set to `true` to enable ACP mode, which keeps a persistent background `agy acp` process (currently plain-text output only; tool calls, permission prompts, and non-text outputs return HTTP 502).
+- `GEMINI_AUDIT`: Set to `true` to enable audit logging of raw `agy` input/output JSON lines to a separate JSONL file (default: `false`; fallback env var: `PROXY_AUDIT`).
+- `GEMINI_AUDIT_FILE`: Path to the JSONL audit log file (default: `/app/logs/audit.jsonl` in Docker if `/app/logs` exists, otherwise `logs/audit.jsonl`; fallback env var: `PROXY_AUDIT_FILE`).
 
 *Note: During startup, the proxy automatically executes `agy models` to dynamically discover supported models for the `/v1/models` endpoint without needing any external Gemini API keys.*
 
@@ -148,6 +150,8 @@ Available options:
 - `--max-concurrency`: Max concurrent subprocesses (default: 4)
 - `--timeout`: CLI command timeout in seconds (default: 30.0)
 - `--acp`: Enable ACP mode with a persistent background `agy acp` process (currently plain-text output only; can also be set via `GEMINI_ACP_MODE` env var)
+- `--audit`: Enable audit logging of raw `agy` input/output JSON to a separate JSONL file (can also be set via `GEMINI_AUDIT` env var)
+- `--audit-file`: Path to the audit JSONL file (can also be set via `GEMINI_AUDIT_FILE` env var)
 - `--debug`: Enable debug mode (enables debug logging and file watching)
 
 ## ❓ FAQ

@@ -29,6 +29,15 @@ class Config:
         # Policy configuration
         self.use_no_tools_policy: bool = os.environ.get('USE_NO_TOOLS_POLICY', 'false').lower() == 'true'
         self.policy_path: str = os.environ.get('GEMINI_POLICY_PATH', '/app/policies/no-tools.json')
+
+        # Audit logging configuration
+        self.audit_enabled: bool = (
+            os.environ.get('GEMINI_AUDIT') or os.environ.get('PROXY_AUDIT') or 'false'
+        ).lower() in ('1', 'true', 'yes', 'on')
+        default_audit_file = '/app/logs/audit.jsonl' if os.path.isdir('/app/logs') else 'logs/audit.jsonl'
+        self.audit_file: str = (
+            os.environ.get('GEMINI_AUDIT_FILE') or os.environ.get('PROXY_AUDIT_FILE') or default_audit_file
+        )
         
         # Limit configuration
         self.rate_limit: int = int(os.environ.get('PROXY_RATE_LIMIT', '60'))  # Requests per minute

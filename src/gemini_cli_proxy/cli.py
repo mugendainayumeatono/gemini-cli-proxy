@@ -4,6 +4,8 @@ CLI entry module
 Uses Click to handle command line arguments and application startup
 """
 
+from typing import Optional
+
 import click
 import uvicorn
 
@@ -60,6 +62,20 @@ import uvicorn
     help="Enable ACP mode with a persistent background agy acp process"
 )
 @click.option(
+    "--audit",
+    envvar=["GEMINI_AUDIT", "PROXY_AUDIT"],
+    is_flag=True,
+    default=False,
+    help="Enable audit logging of raw agy input/output JSON to a separate file"
+)
+@click.option(
+    "--audit-file",
+    envvar=["GEMINI_AUDIT_FILE", "PROXY_AUDIT_FILE"],
+    default=None,
+    type=str,
+    help="Path to audit JSONL file"
+)
+@click.option(
     "--debug",
     is_flag=True,
     help="Enable debug mode"
@@ -73,6 +89,8 @@ def main(
     api_key: str,
     gemini_command: str,
     acp: bool,
+    audit: bool,
+    audit_file: Optional[str],
     debug: bool
 ):
     """Start Gemini CLI Proxy server"""
@@ -92,6 +110,9 @@ def main(
     os.environ['GEMINI_TIMEOUT'] = str(timeout)
     os.environ['GEMINI_COMMAND'] = gemini_command
     os.environ['GEMINI_ACP_MODE'] = str(acp)
+    os.environ['GEMINI_AUDIT'] = str(audit)
+    if audit_file:
+        os.environ['GEMINI_AUDIT_FILE'] = audit_file
     
     config.host = host
     config.port = port
@@ -101,6 +122,9 @@ def main(
     config.timeout = timeout
     config.gemini_command = gemini_command
     config.acp_mode = acp
+    config.audit_enabled = audit
+    if audit_file:
+        config.audit_file = audit_file
     config.debug = debug
     config.proxy_api_key = api_key
     

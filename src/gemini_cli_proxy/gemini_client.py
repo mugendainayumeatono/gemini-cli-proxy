@@ -12,7 +12,8 @@ import time
 import uuid
 import base64
 import json
-from typing import List, Optional, AsyncGenerator, Tuple
+from typing import Any, List, Optional, AsyncGenerator, Tuple
+from .audit import record_audit
 from .models import ChatMessage
 from .config import config
 
@@ -247,6 +248,12 @@ class GeminiClient:
                 raise RuntimeError(f"Permission denied executing {cmd_name}: check executable permissions") from e
 
             logger.info(f"{cmd_name} stream process started (PID: {process.pid})")
+            record_audit(
+                "input",
+                {"command": cmd_name, "args": cmd_args, "model": model, "prompt": prompt},
+                mode="cli_stream",
+                pid=process.pid,
+            )
             
             # Read stderr concurrently in background to avoid OS pipe deadlock
             stderr_task = asyncio.create_task(process.stderr.read())
@@ -272,8 +279,10 @@ class GeminiClient:
                         event_data = json.loads(line_str)
                     except json.JSONDecodeError:
                         logger.debug(f"Non-JSON stdout line from {cmd_name}: {line_str}")
+                        record_audit("output", {"raw": line_str}, mode="cli_stream", pid=process.pid)
                         unparsed_lines.append(line_str)
                         continue
+                    record_audit("output", event_data, mode="cli_stream", pid=process.pid)
                     
                     event_type = event_data.get("event")
                     if event_type == "step_update":
@@ -337,6 +346,13 @@ class GeminiClient:
                     stderr_task.cancel()
                     stderr_bytes = b""
             stderr_text = stderr_bytes.decode('utf-8', errors='replace').strip() if stderr_bytes else ""
+            if exit_code != 0 or stderr_text:
+                record_audit(
+                    "output",
+                    {"exit_code": exit_code, "stderr": stderr_text},
+                    mode="cli_stream",
+                    pid=process.pid,
+                )
             
             # Check return code
             if exit_code != 0:
@@ -469,6 +485,12 @@ class GeminiClient:
                 raise RuntimeError(f"Permission denied executing {cmd_name}: check executable permissions") from e
 
             logger.info(f"{cmd_name} process started (PID: {process.pid})")
+            record_audit(
+                "input",
+                {"command": cmd_name, "args": cmd_args, "model": model, "prompt": prompt},
+                mode="cli_sync",
+                pid=process.pid,
+            )
             
             # Wait for command execution to complete with timeout
             stdout, stderr = await asyncio.wait_for(
@@ -481,6 +503,18 @@ class GeminiClient:
             
             stderr_text = stderr.decode('utf-8', errors='replace').strip() if stderr else ""
             stdout_text = stdout.decode('utf-8', errors='replace').strip() if stdout else ""
+            parsed_or_text: Any = stdout_text
+            if stdout_text:
+                try:
+                    parsed_or_text = json.loads(stdout_text)
+                except json.JSONDecodeError:
+                    parsed_or_text = stdout_text
+            record_audit(
+                "output",
+                {"exit_code": exit_code, "stdout": parsed_or_text, "stderr": stderr_text},
+                mode="cli_sync",
+                pid=process.pid,
+            )
             
             # Check return code
             if exit_code != 0:

@@ -199,3 +199,7 @@ cython_debug/
 # Temporary image files for Gemini CLI
 .gemini-cli-proxy/
 .gemini/
+
+# Runtime audit logs
+logs/*.jsonl
+audit.jsonl
