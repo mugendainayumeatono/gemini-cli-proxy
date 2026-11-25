@@ -8,10 +8,8 @@ services:
 
     volumes:
       - ./src:/app/src
-      - ./policies:/app/policies
       - ./pyproject.toml:/app/pyproject.toml
       - ./uv.lock:/app/uv.lock
-      - ./README.md:/app/README.md
       # 持久化配置 (允许通过 HOST_CONFIG_DIR 环境变量指定宿主机目录，默认 ./.gemini)
       - ${HOST_CONFIG_DIR:-./.gemini}:/root/.gemini
       # 持久化日志到本地 logs 目录
@@ -20,7 +18,7 @@ services:
       - ./entrypoint.sh:/entrypoint.sh
     environment:
       - PROXY_API_KEY=${PROXY_API_KEY:-sk-proxy-920cd156c9ec2f2616385cf7b7b5efe7}
-      - USE_NO_TOOLS_POLICY=true
+      - GEMINI_ACP_MODE=true
       - PROXY_MAX_CONCURRENCY=2
       - GEMINI_TIMEOUT=300
     logging:

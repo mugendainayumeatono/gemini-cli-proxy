@@ -22,10 +22,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # 工作目录
 WORKDIR /app
 
-# 复制并安装依赖
-COPY pyproject.toml uv.lock ./
-COPY policies /app/policies
-RUN uv sync --no-install-project
+# 复制依赖清单与 README.md (hatchling 构建元数据需要)
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+# 复制源码并安装项目本身，使镜像自包含
+COPY src /app/src
+RUN uv sync --frozen --no-dev
 
 # 启动脚本
 COPY entrypoint.sh /entrypoint.sh

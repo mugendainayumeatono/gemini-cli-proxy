@@ -49,5 +49,5 @@ else
     fi
     
     echo "日志路径: $LOG_FILE" | tee -a "$LOG_FILE"
-    exec uv run gemini-cli-proxy --host 0.0.0.0 --port 8765 2>&1 | tee -a "$LOG_FILE"
+    exec uv run --no-dev gemini-cli-proxy --host 0.0.0.0 --port 8765 2>&1 | tee -a "$LOG_FILE"
 fi

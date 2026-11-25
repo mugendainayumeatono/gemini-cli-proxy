@@ -8,7 +8,6 @@ __pycache__
 .cursor
 img
 tests
-README.md
 README_zh.md
 LICENSE
 .python-version
