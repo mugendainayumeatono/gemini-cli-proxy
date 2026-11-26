@@ -9,7 +9,7 @@ import uuid
 import logging
 import json
 import asyncio
-from typing import AsyncGenerator
+from typing import Optional
 from fastapi.responses import StreamingResponse
 
 from .models import (
@@ -18,7 +18,10 @@ from .models import (
     ChatCompletionChoice,
     ChatCompletionStreamResponse,
     ChatCompletionStreamChoice,
-    ChatMessage
+    ChatMessage,
+    CompletionResult,
+    CompletionStreamChunk,
+    CompletionUsage,
 )
 from .acp_client import ACPError
 from .gemini_client import gemini_client
@@ -44,11 +47,16 @@ class OpenAIAdapter:
         
         try:
             # Call Gemini CLI
-            response_text = await gemini_client.chat_completion(
+            raw_result = await gemini_client.chat_completion(
                 messages=request.messages,
                 model=request.model,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens
+            )
+            result = (
+                CompletionResult(content=raw_result)
+                if isinstance(raw_result, str)
+                else raw_result
             )
             duration = time.monotonic() - start_time
             
@@ -60,16 +68,18 @@ class OpenAIAdapter:
                         index=0,
                         message=ChatMessage(
                             role="assistant",
-                            content=response_text
+                            content=result.content,
+                            reasoning_content=result.reasoning_content,
                         ),
                         finish_reason="stop"
                     )
-                ]
+                ],
+                usage=result.usage,
             )
             
             logger.info(
                 f"Chat completion request processed successfully: "
-                f"model={request.model}, duration={duration:.2f}s, response length={len(response_text)}"
+                f"model={request.model}, duration={duration:.2f}s, response length={len(result.content)}"
             )
             return response
             
@@ -129,29 +139,50 @@ class OpenAIAdapter:
                     max_tokens=request.max_tokens
                 )
                 
-                # Send data chunks one by one
-                async for chunk in stream_generator:
-                    if not chunk:
-                        continue
-                    chunk_count += 1
-                        
-                    stream_response = ChatCompletionStreamResponse(
-                        id=completion_id,
-                        created=created_time,
-                        model=request.model,
-                        choices=[
-                            ChatCompletionStreamChoice(
-                                index=0,
-                                delta={"content": chunk},
-                                finish_reason=None
-                            )
-                        ]
-                    )
-                    
-                    # Send data chunk
-                    yield f"data: {stream_response.model_dump_json()}\n\n"
+                final_usage: Optional[CompletionUsage] = None
                 
-                # Send end marker
+                # Send data chunks one by one
+                async for raw_chunk in stream_generator:
+                    chunk = (
+                        CompletionStreamChunk(content=raw_chunk)
+                        if isinstance(raw_chunk, str)
+                        else raw_chunk
+                    )
+                    if chunk.usage is not None:
+                        final_usage = chunk.usage
+                    if chunk.reasoning_content:
+                        chunk_count += 1
+                        reasoning_response = ChatCompletionStreamResponse(
+                            id=completion_id,
+                            created=created_time,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionStreamChoice(
+                                    index=0,
+                                    delta={"reasoning_content": chunk.reasoning_content},
+                                    finish_reason=None
+                                )
+                            ]
+                        )
+                        yield f"data: {reasoning_response.model_dump_json()}\n\n"
+                    if chunk.content:
+                        chunk_count += 1
+                        stream_response = ChatCompletionStreamResponse(
+                            id=completion_id,
+                            created=created_time,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionStreamChoice(
+                                    index=0,
+                                    delta={"content": chunk.content},
+                                    finish_reason=None
+                                )
+                            ]
+                        )
+                        yield f"data: {stream_response.model_dump_json()}\n\n"
+                
+                # Send end marker and optional usage
+                include_usage = (request.stream_options or {}).get("include_usage")
                 final_response = ChatCompletionStreamResponse(
                     id=completion_id,
                     created=created_time,
@@ -162,9 +193,20 @@ class OpenAIAdapter:
                             delta={},
                             finish_reason="stop"
                         )
-                    ]
+                    ],
+                    usage=final_usage if (include_usage is None and final_usage is not None) else None,
                 )
                 yield f"data: {final_response.model_dump_json()}\n\n"
+
+                if include_usage is True and final_usage is not None:
+                    usage_response = ChatCompletionStreamResponse(
+                        id=completion_id,
+                        created=created_time,
+                        model=request.model,
+                        choices=[],
+                        usage=final_usage,
+                    )
+                    yield f"data: {usage_response.model_dump_json()}\n\n"
                 yield "data: [DONE]\n\n"
                 
                 stream_duration = time.monotonic() - stream_start_time

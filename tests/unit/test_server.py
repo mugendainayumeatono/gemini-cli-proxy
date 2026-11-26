@@ -1,9 +1,17 @@
+import json
 import logging
 from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
 from gemini_cli_proxy.acp_client import ACPError
+from gemini_cli_proxy.models import (
+    CompletionResult,
+    CompletionStreamChunk,
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 from gemini_cli_proxy.server import app
 from gemini_cli_proxy.config import config
 
@@ -145,5 +153,209 @@ def test_chat_completions_stream_acp_error_emits_sse_error(client, caplog):
             assert '"type": "acp_error"' in body
             assert "data: [DONE]" in body
             assert "acp_permission_required" in caplog.text
+
+
+def _parse_sse_events(body: str):
+    """Parse SSE data lines into JSON dicts and raw markers."""
+    events = []
+    for line in body.splitlines():
+        if not line.startswith("data: "):
+            continue
+        payload = line[len("data: "):]
+        if payload == "[DONE]":
+            events.append("[DONE]")
+        else:
+            events.append(json.loads(payload))
+    return events
+
+
+def test_chat_completions_with_reasoning_and_usage(client):
+    usage = CompletionUsage(
+        prompt_tokens=100,
+        completion_tokens=45,
+        total_tokens=145,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=20),
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=60),
+    )
+    mock_result = CompletionResult(
+        content="The answer is 42.",
+        reasoning_content="Let me think step by step.",
+        usage=usage,
+    )
+
+    with patch(
+        "gemini_cli_proxy.gemini_client.gemini_client.chat_completion",
+        AsyncMock(return_value=mock_result),
+    ):
+        payload = {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "What is the answer?"}],
+        }
+        response = client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        message = data["choices"][0]["message"]
+        assert message["role"] == "assistant"
+        assert message["content"] == "The answer is 42."
+        assert message["reasoning_content"] == "Let me think step by step."
+        assert data["usage"] == {
+            "prompt_tokens": 100,
+            "completion_tokens": 45,
+            "total_tokens": 145,
+            "completion_tokens_details": {"reasoning_tokens": 20},
+            "prompt_tokens_details": {"cached_tokens": 60},
+        }
+
+
+def test_chat_completions_omits_none_reasoning_and_usage(client):
+    mock_result = CompletionResult(
+        content="Plain reply.",
+        reasoning_content=None,
+        usage=None,
+    )
+
+    with patch(
+        "gemini_cli_proxy.gemini_client.gemini_client.chat_completion",
+        AsyncMock(return_value=mock_result),
+    ):
+        payload = {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        response = client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        message = data["choices"][0]["message"]
+        assert message["content"] == "Plain reply."
+        assert "reasoning_content" not in message
+        assert "usage" not in data
+
+
+def test_chat_completions_multiturn_with_assistant_reasoning_content(client):
+    mock_result = CompletionResult(content="Follow-up answer.")
+
+    with patch(
+        "gemini_cli_proxy.gemini_client.gemini_client.chat_completion",
+        AsyncMock(return_value=mock_result),
+    ) as mock_chat:
+        payload = {
+            "model": "gemini-2.5-flash",
+            "messages": [
+                {"role": "user", "content": "First question"},
+                {
+                    "role": "assistant",
+                    "content": "First answer",
+                    "reasoning_content": "Previous reasoning trace",
+                },
+                {"role": "user", "content": "Second question"},
+            ],
+        }
+        response = client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["choices"][0]["message"]["content"] == "Follow-up answer."
+        passed_messages = mock_chat.call_args.kwargs["messages"]
+        assert passed_messages[1].reasoning_content == "Previous reasoning trace"
+
+
+@pytest.mark.parametrize(
+    "stream_options,expected_mode",
+    [
+        (None, "attached_to_stop"),
+        ({"include_usage": True}, "separate_chunk"),
+        ({"include_usage": False}, "omitted"),
+    ],
+)
+def test_chat_completions_stream_reasoning_and_usage(client, stream_options, expected_mode):
+    usage = CompletionUsage(
+        prompt_tokens=30,
+        completion_tokens=15,
+        total_tokens=45,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=5),
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=10),
+    )
+
+    async def fake_stream(*args, **kwargs):
+        yield CompletionStreamChunk(reasoning_content="Thinking...")
+        yield CompletionStreamChunk(content="Hello ")
+        yield CompletionStreamChunk(content="world")
+        yield CompletionStreamChunk(usage=usage)
+
+    with patch(
+        "gemini_cli_proxy.gemini_client.gemini_client.chat_completion_stream",
+        side_effect=fake_stream,
+    ):
+        payload = {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+        }
+        if stream_options is not None:
+            payload["stream_options"] = stream_options
+
+        response = client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert response.status_code == 200
+        events = _parse_sse_events(response.text)
+        assert events[-1] == "[DONE]"
+
+        chunks = events[:-1]
+        assert chunks[0]["choices"][0]["delta"] == {"role": "assistant", "content": ""}
+        assert chunks[0]["choices"][0]["finish_reason"] is None
+        assert "usage" not in chunks[0]
+
+        assert chunks[1]["choices"][0]["delta"] == {"reasoning_content": "Thinking..."}
+        assert chunks[1]["choices"][0]["finish_reason"] is None
+        assert "usage" not in chunks[1]
+
+        assert chunks[2]["choices"][0]["delta"] == {"content": "Hello "}
+        assert chunks[2]["choices"][0]["finish_reason"] is None
+        assert "usage" not in chunks[2]
+
+        assert chunks[3]["choices"][0]["delta"] == {"content": "world"}
+        assert chunks[3]["choices"][0]["finish_reason"] is None
+        assert "usage" not in chunks[3]
+
+        expected_usage_dict = {
+            "prompt_tokens": 30,
+            "completion_tokens": 15,
+            "total_tokens": 45,
+            "completion_tokens_details": {"reasoning_tokens": 5},
+            "prompt_tokens_details": {"cached_tokens": 10},
+        }
+
+        if expected_mode == "attached_to_stop":
+            assert len(chunks) == 5
+            stop_chunk = chunks[4]
+            assert stop_chunk["choices"][0]["finish_reason"] == "stop"
+            assert stop_chunk["usage"] == expected_usage_dict
+        elif expected_mode == "separate_chunk":
+            assert len(chunks) == 6
+            stop_chunk = chunks[4]
+            usage_chunk = chunks[5]
+            assert stop_chunk["choices"][0]["finish_reason"] == "stop"
+            assert "usage" not in stop_chunk
+            assert usage_chunk["choices"] == []
+            assert usage_chunk["usage"] == expected_usage_dict
+        elif expected_mode == "omitted":
+            assert len(chunks) == 5
+            stop_chunk = chunks[4]
+            assert stop_chunk["choices"][0]["finish_reason"] == "stop"
+            assert "usage" not in stop_chunk
 
 

@@ -14,7 +14,14 @@ import base64
 import json
 from typing import Any, List, Optional, AsyncGenerator, Tuple
 from .audit import record_audit
-from .models import ChatMessage
+from .models import (
+    ChatMessage,
+    CompletionResult,
+    CompletionStreamChunk,
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 from .config import config
 
 logger = logging.getLogger('gemini_cli_proxy')
@@ -52,6 +59,52 @@ async def _safe_cleanup_process(process, cmd_name: str, mode: str):
             )
         except Exception as term_err:
             logger.warning(f"Error terminating {cmd_name} {mode} process (PID: {process.pid}): {term_err}")
+
+
+def _convert_cli_usage(raw_usage: Any) -> Optional[CompletionUsage]:
+    """Convert raw Gemini CLI usage dictionary into CompletionUsage."""
+    if not isinstance(raw_usage, dict):
+        return None
+
+    input_tokens = raw_usage.get("input_tokens")
+    output_tokens = raw_usage.get("output_tokens")
+    if input_tokens is None or output_tokens is None:
+        return None
+
+    prompt_tokens = int(input_tokens)
+    completion_tokens = int(output_tokens)
+    total_tokens_raw = raw_usage.get("total_tokens")
+    total_tokens = (
+        int(total_tokens_raw)
+        if total_tokens_raw is not None
+        else (prompt_tokens + completion_tokens)
+    )
+
+    thinking_tokens = raw_usage.get("thinking_tokens")
+    if thinking_tokens is None:
+        thinking_tokens = raw_usage.get("thought_tokens")
+    completion_details = (
+        CompletionTokensDetails(reasoning_tokens=int(thinking_tokens))
+        if thinking_tokens is not None
+        else None
+    )
+
+    cache_read_tokens = raw_usage.get("cache_read_tokens")
+    if cache_read_tokens is None:
+        cache_read_tokens = raw_usage.get("cached_read_tokens")
+    prompt_details = (
+        PromptTokensDetails(cached_tokens=int(cache_read_tokens))
+        if cache_read_tokens is not None
+        else None
+    )
+
+    return CompletionUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        completion_tokens_details=completion_details,
+        prompt_tokens_details=prompt_details,
+    )
 
 
 class GeminiClient:
@@ -123,7 +176,7 @@ class GeminiClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         **kwargs
-    ) -> str:
+    ) -> CompletionResult:
         """
         Execute chat completion request
         
@@ -135,7 +188,7 @@ class GeminiClient:
             **kwargs: Other parameters
             
         Returns:
-            Response text from Gemini CLI
+            CompletionResult containing response content, optional reasoning_content, and optional usage
             
         Raises:
             asyncio.TimeoutError: Timeout error
@@ -158,7 +211,7 @@ class GeminiClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         **kwargs
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
         """
         Execute streaming chat completion request
         
@@ -170,7 +223,7 @@ class GeminiClient:
             **kwargs: Other parameters
             
         Yields:
-            Response text chunks
+            CompletionStreamChunk items for content, reasoning_content, and usage
         """
         if config.acp_mode:
             from .acp_client import acp_client
@@ -192,9 +245,9 @@ class GeminiClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         **kwargs
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
         """
-        Execute Gemini CLI command and yield output as it arrives
+        Execute Gemini CLI command and yield output chunks as they arrive
         
         Args:
             messages: List of chat messages
@@ -204,7 +257,7 @@ class GeminiClient:
             **kwargs: Other parameters
             
         Yields:
-            Command output chunks
+            CompletionStreamChunk objects with content deltas, reasoning deltas, or final usage
         """
         prompt, temp_files = self._build_prompt_with_images(messages)
         cmd_name = config.gemini_command
@@ -260,6 +313,7 @@ class GeminiClient:
             
             unparsed_lines = []
             error_from_result = ""
+            result_usage: Optional[CompletionUsage] = None
             
             # Read from stdout incrementally (NDJSON event stream)
             while True:
@@ -287,13 +341,17 @@ class GeminiClient:
                     event_type = event_data.get("event")
                     if event_type == "step_update":
                         su = event_data.get("step_update", {})
+                        thinking_delta = su.get("thinking_delta") or su.get("thought_delta")
+                        if thinking_delta:
+                            yield CompletionStreamChunk(reasoning_content=thinking_delta)
                         delta = su.get("text_delta")
                         if delta:
                             chunk_count += 1
                             total_bytes += len(delta.encode('utf-8'))
-                            yield delta
+                            yield CompletionStreamChunk(content=delta)
                     elif event_type == "result":
                         result_obj = event_data.get("result", {})
+                        result_usage = _convert_cli_usage(result_obj.get("usage"))
                         status = result_obj.get("status")
                         err = result_obj.get("error")
                         if status == "ERROR" or err:
@@ -303,7 +361,7 @@ class GeminiClient:
                             resp = result_obj.get("response")
                             chunk_count += 1
                             total_bytes += len(resp.encode('utf-8'))
-                            yield resp
+                            yield CompletionStreamChunk(content=resp)
                 except asyncio.TimeoutError:
                     duration = time.monotonic() - start_time
                     logger.error(
@@ -386,6 +444,9 @@ class GeminiClient:
                 raise RuntimeError(f"{cmd_name} produced empty response ({status_str}): {stderr_text or 'no output from command'}")
 
             # exit_code == 0
+            if result_usage is not None:
+                yield CompletionStreamChunk(usage=result_usage)
+
             logger.info(
                 f"{cmd_name} stream command completed successfully with {status_str} "
                 f"(PID: {process.pid}, duration: {duration:.2f}s, chunks: {chunk_count}, bytes: {total_bytes})"
@@ -433,9 +494,9 @@ class GeminiClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         **kwargs
-    ) -> str:
+    ) -> CompletionResult:
         """
-        Execute Gemini CLI command
+        Execute Gemini CLI command in strict JSON output mode
         
         Args:
             messages: List of chat messages
@@ -445,11 +506,11 @@ class GeminiClient:
             **kwargs: Other parameters
             
         Returns:
-            Command output result
+            CompletionResult with parsed response, optional reasoning_content, and optional usage
         """
         prompt, temp_files = self._build_prompt_with_images(messages)
         cmd_name = config.gemini_command
-        cmd_args = [cmd_name, "-p", prompt, "--output-format", "text"]
+        cmd_args = [cmd_name, "-p", prompt, "--output-format", "json"]
         if config.effort:
             cmd_args.extend(["--effort", config.effort])
         
@@ -503,22 +564,26 @@ class GeminiClient:
             
             stderr_text = stderr.decode('utf-8', errors='replace').strip() if stderr else ""
             stdout_text = stdout.decode('utf-8', errors='replace').strip() if stdout else ""
-            parsed_or_text: Any = stdout_text
+            parsed_json: Optional[dict] = None
             if stdout_text:
                 try:
-                    parsed_or_text = json.loads(stdout_text)
+                    loaded = json.loads(stdout_text)
+                    if isinstance(loaded, dict):
+                        parsed_json = loaded
                 except json.JSONDecodeError:
-                    parsed_or_text = stdout_text
+                    parsed_json = None
             record_audit(
                 "output",
-                {"exit_code": exit_code, "stdout": parsed_or_text, "stderr": stderr_text},
+                {"exit_code": exit_code, "stdout": parsed_json if parsed_json is not None else stdout_text, "stderr": stderr_text},
                 mode="cli_sync",
                 pid=process.pid,
             )
             
             # Check return code
             if exit_code != 0:
-                error_msg = stderr_text if stderr_text else stdout_text
+                raw_json_err = parsed_json.get("error") if parsed_json else ""
+                json_err_str = raw_json_err if isinstance(raw_json_err, str) else (json.dumps(raw_json_err) if raw_json_err else "")
+                error_msg = stderr_text or json_err_str or stdout_text or f"Process exited with {status_str}"
                 simplified_msg = self._simplify_error_message(error_msg)
                 
                 logger.error(
@@ -541,17 +606,57 @@ class GeminiClient:
                 )
                 raise RuntimeError(f"{cmd_name} produced empty response ({status_str}): {stderr_text or 'no output from command'}")
 
+            # Strictly require a valid JSON object envelope
+            if parsed_json is None:
+                logger.error(
+                    f"{cmd_name} command completed with {status_str} but produced invalid JSON output "
+                    f"(PID: {process.pid}, duration: {duration:.2f}s).\n"
+                    f"Stderr: {stderr_text or '<empty>'}\n"
+                    f"Stdout: {stdout_text[:500]}"
+                )
+                raise RuntimeError(
+                    f"{cmd_name} produced invalid JSON output ({status_str}): {stdout_text[:200]}"
+                )
+
+            status = parsed_json.get("status")
+            err = parsed_json.get("error")
+            if status == "ERROR" or err or (status is not None and status != "SUCCESS"):
+                err_text = err if isinstance(err, str) else (json.dumps(err) if err else f"CLI returned status {status}")
+                simplified_msg = self._simplify_error_message(err_text)
+                logger.error(f"{cmd_name} command reported error in JSON output: {err_text}")
+                raise RuntimeError(f"{cmd_name} execution failed: {simplified_msg or err_text}")
+
+            raw_resp = parsed_json.get("response")
+            response_text = raw_resp.strip() if isinstance(raw_resp, str) else ""
+            if not response_text:
+                logger.error(
+                    f"{cmd_name} command completed with {status_str} but JSON response field was empty "
+                    f"(PID: {process.pid}, duration: {duration:.2f}s).\n"
+                    f"Stderr: {stderr_text or '<empty>'}"
+                )
+                raise RuntimeError(
+                    f"{cmd_name} produced empty response ({status_str}): {stderr_text or 'empty response field in JSON output'}"
+                )
+
+            raw_reasoning = parsed_json.get("reasoning_content") or parsed_json.get("thinking")
+            reasoning_content = raw_reasoning if isinstance(raw_reasoning, str) and raw_reasoning else None
+            usage = _convert_cli_usage(parsed_json.get("usage"))
+
             # exit_code == 0
             logger.info(
                 f"{cmd_name} command completed successfully with {status_str} "
-                f"(PID: {process.pid}, duration: {duration:.2f}s, output length: {len(stdout_text)} chars)"
+                f"(PID: {process.pid}, duration: {duration:.2f}s, output length: {len(response_text)} chars)"
             )
             if stderr_text:
                 logger.warning(
                     f"{cmd_name} process (PID: {process.pid}) exited with code 0 but produced stderr output: {stderr_text}"
                 )
-            logger.debug(f"{cmd_name} response content: {stdout_text}")
-            return stdout_text
+            logger.debug(f"{cmd_name} response content: {response_text}")
+            return CompletionResult(
+                content=response_text,
+                reasoning_content=reasoning_content,
+                usage=usage,
+            )
             
         except (asyncio.CancelledError, GeneratorExit):
             duration = time.monotonic() - start_time

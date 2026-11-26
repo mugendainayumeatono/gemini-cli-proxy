@@ -39,9 +39,22 @@ from acp.schema import (
 )
 
 from gemini_cli_proxy import __version__
-from gemini_cli_proxy.acp_client import ACPClient, ACPError, _build_prompt_blocks
+from gemini_cli_proxy.acp_client import (
+    ACPClient,
+    ACPError,
+    _build_prompt_blocks,
+    _convert_acp_usage,
+)
 from gemini_cli_proxy.config import config
-from gemini_cli_proxy.models import ChatContentPart, ChatMessage
+from gemini_cli_proxy.models import (
+    ChatContentPart,
+    ChatMessage,
+    CompletionResult,
+    CompletionStreamChunk,
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 
 
 def _make_fake_process(pid: int = 4242, returncode: int | None = None) -> MagicMock:
@@ -241,10 +254,20 @@ async def test_chat_completion_sync_and_stream_with_benign_updates():
     chunks = []
     async for chunk in client.chat_completion_stream(messages, model="gemini-3.8-flash-low"):
         chunks.append(chunk)
-    assert chunks == ["Hello ", "ACP!"]
+    expected_usage = CompletionUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
+    assert chunks == [
+        CompletionStreamChunk(reasoning_content="internal reasoning"),
+        CompletionStreamChunk(content="Hello "),
+        CompletionStreamChunk(content="ACP!"),
+        CompletionStreamChunk(usage=expected_usage),
+    ]
 
     full = await client.chat_completion(messages, model="gemini-3.8-flash-low")
-    assert full == "Hello ACP!"
+    assert full == CompletionResult(
+        content="Hello ACP!",
+        reasoning_content="internal reasoning",
+        usage=expected_usage,
+    )
     assert conn.close_session.await_count == 2
 
 
@@ -581,7 +604,7 @@ async def test_stream_cancellation_cancels_and_closes_session():
     async def run_stream_and_cancel():
         gen = client.chat_completion_stream([ChatMessage(role="user", content="hi")], model="m")
         first = await gen.__anext__()
-        assert first == "first"
+        assert first == CompletionStreamChunk(content="first")
         task = asyncio.create_task(gen.__anext__())
         await asyncio.sleep(0.02)
         task.cancel()
@@ -629,8 +652,8 @@ async def test_concurrent_sessions_isolated_by_session_id():
         client.chat_completion([ChatMessage(role="user", content="1")], model="m"),
         client.chat_completion([ChatMessage(role="user", content="2")], model="m"),
     )
-    assert res1 == "one"
-    assert res2 == "two"
+    assert res1 == CompletionResult(content="one")
+    assert res2 == CompletionResult(content="two")
 
 
 @pytest.mark.asyncio
@@ -663,7 +686,204 @@ async def test_stream_raises_acp_error_mid_stream():
         ):
             received.append(chunk)
 
-    assert received == ["partial "]
+    assert received == [CompletionStreamChunk(content="partial ")]
     assert exc_info.value.code == "acp_tool_call_not_supported"
     conn.cancel.assert_awaited_once_with(session_id="sess-mid")
     conn.close_session.assert_awaited_once_with(session_id="sess-mid")
+
+
+@pytest.mark.asyncio
+async def test_multi_chunk_thought_and_usage_details():
+    client = ACPClient()
+    client._process = _make_fake_process()
+    conn = _make_fake_conn(session_id="sess-think")
+    client._conn = conn
+
+    async def think_prompt(session_id: str, prompt):
+        await client._handler.session_update(
+            session_id,
+            AgentThoughtChunk(
+                session_update="agent_thought_chunk",
+                content=TextContentBlock(type="text", text="step 1 "),
+            ),
+        )
+        await client._handler.session_update(
+            session_id,
+            AgentThoughtChunk(
+                session_update="agent_thought_chunk",
+                content=TextContentBlock(type="text", text="step 2"),
+            ),
+        )
+        await client._handler.session_update(
+            session_id,
+            AgentMessageChunk(
+                session_update="agent_message_chunk",
+                content=TextContentBlock(type="text", text="Final "),
+            ),
+        )
+        await client._handler.session_update(
+            session_id,
+            AgentMessageChunk(
+                session_update="agent_message_chunk",
+                content=TextContentBlock(type="text", text="answer"),
+            ),
+        )
+        return PromptResponse(
+            stop_reason="end_turn",
+            usage=Usage(
+                input_tokens=120,
+                output_tokens=85,
+                total_tokens=205,
+                thought_tokens=35,
+                cached_read_tokens=40,
+            ),
+        )
+
+    conn.prompt = AsyncMock(side_effect=think_prompt)
+    messages = [ChatMessage(role="user", content="Explain")]
+
+    expected_usage = CompletionUsage(
+        prompt_tokens=120,
+        completion_tokens=85,
+        total_tokens=205,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=35),
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=40),
+    )
+
+    streamed = []
+    async for chunk in client.chat_completion_stream(messages, model="gemini-3.8-flash-high"):
+        streamed.append(chunk)
+    assert streamed == [
+        CompletionStreamChunk(reasoning_content="step 1 "),
+        CompletionStreamChunk(reasoning_content="step 2"),
+        CompletionStreamChunk(content="Final "),
+        CompletionStreamChunk(content="answer"),
+        CompletionStreamChunk(usage=expected_usage),
+    ]
+
+    result = await client.chat_completion(messages, model="gemini-3.8-flash-high")
+    assert result == CompletionResult(
+        content="Final answer",
+        reasoning_content="step 1 step 2",
+        usage=expected_usage,
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_thought_chunks_yields_none_reasoning_content():
+    client = ACPClient()
+    client._process = _make_fake_process()
+    conn = _make_fake_conn(session_id="sess-no-think")
+    client._conn = conn
+
+    async def plain_prompt(session_id: str, prompt):
+        await client._handler.session_update(
+            session_id,
+            AgentMessageChunk(
+                session_update="agent_message_chunk",
+                content=TextContentBlock(type="text", text="Just text"),
+            ),
+        )
+        return PromptResponse(stop_reason="end_turn")
+
+    conn.prompt = AsyncMock(side_effect=plain_prompt)
+
+    streamed = []
+    async for chunk in client.chat_completion_stream([ChatMessage(role="user", content="hi")], model="m"):
+        streamed.append(chunk)
+    assert streamed == [CompletionStreamChunk(content="Just text")]
+
+    result = await client.chat_completion([ChatMessage(role="user", content="hi")], model="m")
+    assert result == CompletionResult(content="Just text", reasoning_content=None, usage=None)
+
+
+@pytest.mark.asyncio
+async def test_non_text_thought_chunk_is_ignored_without_aborting(caplog):
+    client = ACPClient()
+    client._process = _make_fake_process()
+    conn = _make_fake_conn(session_id="sess-nontext-thought")
+    client._conn = conn
+
+    async def mixed_prompt(session_id: str, prompt):
+        await client._handler.session_update(
+            session_id,
+            AgentThoughtChunk(
+                session_update="agent_thought_chunk",
+                content=ImageContentBlock(type="image", data="AAAA", mime_type="image/png"),
+            ),
+        )
+        await client._handler.session_update(
+            session_id,
+            AgentMessageChunk(
+                session_update="agent_message_chunk",
+                content=TextContentBlock(type="text", text="Recovered"),
+            ),
+        )
+        return PromptResponse(stop_reason="end_turn")
+
+    conn.prompt = AsyncMock(side_effect=mixed_prompt)
+
+    with caplog.at_level(logging.DEBUG, logger="gemini_cli_proxy"):
+        result = await client.chat_completion([ChatMessage(role="user", content="hi")], model="m")
+
+    assert result == CompletionResult(content="Recovered", reasoning_content=None, usage=None)
+    assert "Ignoring non-text ACP thought content" in caplog.text
+    conn.cancel.assert_not_awaited()
+
+
+def test_convert_acp_usage_variants():
+    assert _convert_acp_usage(None) is None
+    assert _convert_acp_usage({"inputTokens": 10}) is None
+    assert _convert_acp_usage({"outputTokens": 5}) is None
+
+    camel = _convert_acp_usage(
+        {
+            "inputTokens": 100,
+            "outputTokens": 50,
+            "totalTokens": 150,
+            "thoughtTokens": 20,
+            "cachedReadTokens": 10,
+        }
+    )
+    assert camel == CompletionUsage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=20),
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=10),
+    )
+
+    snake_zero = _convert_acp_usage(
+        {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thought_tokens": 0,
+            "cached_read_tokens": 0,
+        }
+    )
+    assert snake_zero == CompletionUsage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=0),
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=0),
+    )
+
+
+def test_build_prompt_blocks_ignores_reasoning_content():
+    messages = [
+        ChatMessage(role="user", content="First question"),
+        ChatMessage(
+            role="assistant",
+            content="First answer",
+            reasoning_content="Internal thought that must not leak",
+        ),
+        ChatMessage(role="user", content="Follow-up"),
+    ]
+    blocks = _build_prompt_blocks(messages)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], TextContentBlock)
+    assert blocks[0].text == (
+        "User: First question\nAssistant: First answer\nUser: Follow-up"
+    )
+    assert "Internal thought" not in blocks[0].text

@@ -47,7 +47,14 @@ from . import __version__
 from .audit import record_audit
 from .config import config
 from .gemini_client import format_exit_status
-from .models import ChatMessage
+from .models import (
+    ChatMessage,
+    CompletionResult,
+    CompletionStreamChunk,
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 
 logger = logging.getLogger("gemini_cli_proxy")
 
@@ -62,7 +69,6 @@ _BENIGN_UPDATE_TYPES = tuple(
         ConfigOptionUpdate,
         CurrentModeUpdate,
         UserMessageChunk,
-        AgentThoughtChunk,
         getattr(acp.schema, "SessionUpdateNotice", None),
         getattr(acp.schema, "SessionUpdateCompactionUpdate", None),
         getattr(acp.schema, "SessionUpdateCompactionSummaryChunk", None),
@@ -77,7 +83,6 @@ _BENIGN_UPDATE_NAMES = {
     "ConfigOptionUpdate",
     "CurrentModeUpdate",
     "UserMessageChunk",
-    "AgentThoughtChunk",
     "SessionUpdateNotice",
     "SessionUpdateCompactionUpdate",
     "SessionUpdateCompactionSummaryChunk",
@@ -112,6 +117,53 @@ class _SessionTurnState:
     abort_error: Optional[ACPError] = None
     saw_text: bool = False
     cancel_sent: bool = False
+    usage: Optional[CompletionUsage] = None
+
+
+def _convert_acp_usage(raw_usage: Any) -> Optional[CompletionUsage]:
+    """Convert an ACP PromptResponse usage object or dict into OpenAI-style CompletionUsage."""
+    if raw_usage is None:
+        return None
+
+    def _pick(snake: str, camel: str) -> Any:
+        if isinstance(raw_usage, dict):
+            val = raw_usage.get(snake)
+            return val if val is not None else raw_usage.get(camel)
+        val = getattr(raw_usage, snake, None)
+        return val if val is not None else getattr(raw_usage, camel, None)
+
+    input_tokens = _pick("input_tokens", "inputTokens")
+    output_tokens = _pick("output_tokens", "outputTokens")
+    if input_tokens is None or output_tokens is None:
+        return None
+
+    total_tokens = _pick("total_tokens", "totalTokens")
+    thought_tokens = _pick("thought_tokens", "thoughtTokens")
+    cached_read_tokens = _pick("cached_read_tokens", "cachedReadTokens")
+
+    resolved_input = int(input_tokens)
+    resolved_output = int(output_tokens)
+    resolved_total = (
+        int(total_tokens) if total_tokens is not None else (resolved_input + resolved_output)
+    )
+
+    completion_details = (
+        CompletionTokensDetails(reasoning_tokens=int(thought_tokens))
+        if thought_tokens is not None
+        else None
+    )
+    prompt_details = (
+        PromptTokensDetails(cached_tokens=int(cached_read_tokens))
+        if cached_read_tokens is not None
+        else None
+    )
+    return CompletionUsage(
+        prompt_tokens=resolved_input,
+        completion_tokens=resolved_output,
+        total_tokens=resolved_total,
+        completion_tokens_details=completion_details,
+        prompt_tokens_details=prompt_details,
+    )
 
 
 def _strip_effort_suffix(model: str) -> Tuple[str, Optional[str]]:
@@ -290,7 +342,7 @@ class _ACPClientHandler(acp.Client):
                 text = getattr(content, "text", "")
                 if text:
                     turn.saw_text = True
-                    await turn.queue.put(text)
+                    await turn.queue.put(CompletionStreamChunk(content=text))
                 return
 
             content_desc = getattr(content, "type", None) or type(content).__name__
@@ -302,6 +354,23 @@ class _ACPClientHandler(acp.Client):
                 code="acp_non_text_content",
             )
             await self._client._abort_turn(session_id, err)
+            return
+
+        if isinstance(update, AgentThoughtChunk) or (
+            getattr(update, "session_update", None) == "agent_thought_chunk"
+        ):
+            content = getattr(update, "content", None)
+            if isinstance(content, TextContentBlock) or getattr(content, "type", None) == "text":
+                text = getattr(content, "text", "")
+                if text:
+                    await turn.queue.put(CompletionStreamChunk(reasoning_content=text))
+                return
+
+            content_desc = getattr(content, "type", None) or type(content).__name__
+            logger.debug(
+                f"Ignoring non-text ACP thought content in session {session_id}: "
+                f"content={content_desc}"
+            )
             return
 
         if isinstance(update, _TOOL_CALL_UPDATE_TYPES):
@@ -809,8 +878,8 @@ class ACPClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         **kwargs: Any,
-    ) -> AsyncGenerator[str, None]:
-        """Execute a streaming ACP chat completion turn and yield text chunks."""
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
+        """Execute a streaming ACP chat completion turn and yield completion chunks."""
         if temperature is not None:
             logger.debug(f"Ignoring temperature parameter in ACP mode: {temperature}")
         if max_tokens is not None:
@@ -875,6 +944,7 @@ class ACPClient:
                             ACPError(f"ACP protocol error: {exc}", code="acp_protocol_error")
                         )
                 else:
+                    turn.usage = _convert_acp_usage(getattr(task.result(), "usage", None))
                     turn.queue.put_nowait(None)
 
             prompt_task.add_done_callback(_on_prompt_done)
@@ -896,6 +966,8 @@ class ACPClient:
                                 "ACP agent returned empty response",
                                 code="acp_empty_response",
                             )
+                        if turn.usage is not None:
+                            yield CompletionStreamChunk(usage=turn.usage)
                         break
                     yield item
 
@@ -947,9 +1019,11 @@ class ACPClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         **kwargs: Any,
-    ) -> str:
-        """Execute a synchronous ACP chat completion turn and return the full response text."""
-        chunks: List[str] = []
+    ) -> CompletionResult:
+        """Execute a synchronous ACP chat completion turn and return the aggregated result."""
+        content_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        usage: Optional[CompletionUsage] = None
         async for chunk in self.chat_completion_stream(
             messages=messages,
             model=model,
@@ -957,8 +1031,17 @@ class ACPClient:
             max_tokens=max_tokens,
             **kwargs,
         ):
-            chunks.append(chunk)
-        return "".join(chunks)
+            if chunk.reasoning_content:
+                reasoning_parts.append(chunk.reasoning_content)
+            if chunk.content:
+                content_parts.append(chunk.content)
+            if chunk.usage is not None:
+                usage = chunk.usage
+        return CompletionResult(
+            content="".join(content_parts),
+            reasoning_content="".join(reasoning_parts) or None,
+            usage=usage,
+        )
 
 
 acp_client = ACPClient()

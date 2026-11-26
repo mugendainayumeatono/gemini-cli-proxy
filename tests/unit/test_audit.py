@@ -14,7 +14,14 @@ from gemini_cli_proxy.audit import AuditLogger, record_audit
 from gemini_cli_proxy.cli import main as cli_main
 from gemini_cli_proxy.config import Config, config
 from gemini_cli_proxy.gemini_client import GeminiClient
-from gemini_cli_proxy.models import ChatMessage
+from gemini_cli_proxy.models import (
+    ChatMessage,
+    CompletionResult,
+    CompletionStreamChunk,
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -297,14 +304,36 @@ class TestGeminiClientAudit:
         mock_process = MagicMock()
         mock_process.pid = 8001
         mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(b'{"answer": "\xe4\xbd\xa0\xe5\xa5\xbd-sync"}', b""))
+        payload = {
+            "status": "SUCCESS",
+            "response": "你好-sync",
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 6,
+                "thinking_tokens": 2,
+                "cache_read_tokens": 4,
+                "total_tokens": 18,
+            },
+        }
+        mock_process.communicate = AsyncMock(return_value=(json.dumps(payload).encode("utf-8"), b""))
 
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)):
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)) as mock_exec:
             resp = await client.chat_completion(
                 messages=[ChatMessage(role="user", content="测试sync")],
                 model="gemini-3.8-flash-low",
             )
-        assert "你好-sync" in resp
+        assert isinstance(resp, CompletionResult)
+        assert resp.content == "你好-sync"
+        assert resp.usage == CompletionUsage(
+            prompt_tokens=12,
+            completion_tokens=6,
+            total_tokens=18,
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=2),
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=4),
+        )
+        exec_args = mock_exec.call_args.args
+        assert "--output-format" in exec_args
+        assert exec_args[exec_args.index("--output-format") + 1] == "json"
 
         lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 2
@@ -321,7 +350,7 @@ class TestGeminiClientAudit:
         assert out["mode"] == "cli_sync"
         assert out["pid"] == 8001
         assert out["data"]["exit_code"] == 0
-        assert out["data"]["stdout"] == {"answer": "你好-sync"}
+        assert out["data"]["stdout"] == payload
 
     @pytest.mark.asyncio
     async def test_cli_stream_records_input_and_output(self, tmp_path):
@@ -340,10 +369,13 @@ class TestGeminiClientAudit:
         mock_stdout.readline = AsyncMock(
             side_effect=[
                 b'{"event":"init","conversation_id":"8002"}\n',
+                '{"event":"step_update","step_update":{"step_type":"thinking","thinking_delta":"思考中"}}\n'.encode(
+                    "utf-8"
+                ),
                 '{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"你好stream"}}\n'.encode(
                     "utf-8"
                 ),
-                b'{"event":"result","result":{"status":"SUCCESS"}}\n',
+                b'{"event":"result","result":{"status":"SUCCESS","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}\n',
                 b"",
             ]
         )
@@ -360,10 +392,14 @@ class TestGeminiClientAudit:
             ):
                 chunks.append(chunk)
 
-        assert "".join(chunks) == "你好stream"
+        assert chunks == [
+            CompletionStreamChunk(reasoning_content="思考中"),
+            CompletionStreamChunk(content="你好stream"),
+            CompletionStreamChunk(usage=CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+        ]
 
         lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
-        assert len(lines) == 4
+        assert len(lines) == 5
         records = [json.loads(line) for line in lines]
 
         assert records[0]["direction"] == "input"
@@ -378,5 +414,9 @@ class TestGeminiClientAudit:
             assert rec["pid"] == 8002
 
         assert records[1]["data"] == {"event": "init", "conversation_id": "8002"}
-        assert records[2]["data"]["step_update"]["text_delta"] == "你好stream"
-        assert records[3]["data"] == {"event": "result", "result": {"status": "SUCCESS"}}
+        assert records[2]["data"]["step_update"]["thinking_delta"] == "思考中"
+        assert records[3]["data"]["step_update"]["text_delta"] == "你好stream"
+        assert records[4]["data"] == {
+            "event": "result",
+            "result": {"status": "SUCCESS", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}},
+        }

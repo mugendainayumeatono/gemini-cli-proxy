@@ -4,10 +4,55 @@ Data model definition module
 Uses Pydantic to define OpenAI format request and response models
 """
 
+from dataclasses import dataclass
 from typing import List, Optional, Union, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 import time
 import uuid
+
+
+class CompletionTokensDetails(BaseModel):
+    """Detailed breakdown of completion tokens"""
+    reasoning_tokens: int = 0
+
+
+class PromptTokensDetails(BaseModel):
+    """Detailed breakdown of prompt tokens"""
+    cached_tokens: int = 0
+
+
+class CompletionUsage(BaseModel):
+    """Token usage statistics for a completion"""
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    completion_tokens_details: Optional[CompletionTokensDetails] = None
+    prompt_tokens_details: Optional[PromptTokensDetails] = None
+
+    @model_serializer(mode="wrap")
+    def serialize_model(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        data = handler(self)
+        if data.get("completion_tokens_details") is None:
+            data.pop("completion_tokens_details", None)
+        if data.get("prompt_tokens_details") is None:
+            data.pop("prompt_tokens_details", None)
+        return data
+
+
+@dataclass
+class CompletionStreamChunk:
+    """Internal streaming chunk yielded by backend clients"""
+    content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    usage: Optional[CompletionUsage] = None
+
+
+@dataclass
+class CompletionResult:
+    """Internal non-streaming completion result returned by backend clients"""
+    content: str
+    reasoning_content: Optional[str] = None
+    usage: Optional[CompletionUsage] = None
 
 
 class ChatContentPart(BaseModel):
@@ -21,6 +66,14 @@ class ChatMessage(BaseModel):
     """Chat message model"""
     role: Literal["system", "user", "assistant"]
     content: Union[str, List[ChatContentPart]]
+    reasoning_content: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def serialize_model(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        data = handler(self)
+        if not data.get("reasoning_content"):
+            data.pop("reasoning_content", None)
+        return data
 
 
 class ChatCompletionRequest(BaseModel):
@@ -30,6 +83,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, gt=0)
     stream: Optional[bool] = False
+    stream_options: Optional[Dict[str, Any]] = None
     top_p: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
     frequency_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0)
@@ -51,7 +105,14 @@ class ChatCompletionResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[ChatCompletionChoice]
-    # Note: According to design document, usage field is omitted since gemini CLI doesn't provide token usage info
+    usage: Optional[CompletionUsage] = None
+
+    @model_serializer(mode="wrap")
+    def serialize_model(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        data = handler(self)
+        if data.get("usage") is None:
+            data.pop("usage", None)
+        return data
 
 
 class ChatCompletionStreamChoice(BaseModel):
@@ -68,6 +129,14 @@ class ChatCompletionStreamResponse(BaseModel):
     created: int
     model: str
     choices: List[ChatCompletionStreamChoice]
+    usage: Optional[CompletionUsage] = None
+
+    @model_serializer(mode="wrap")
+    def serialize_model(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        data = handler(self)
+        if data.get("usage") is None:
+            data.pop("usage", None)
+        return data
 
 
 class ErrorDetail(BaseModel):
